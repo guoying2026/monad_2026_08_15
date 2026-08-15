@@ -195,7 +195,7 @@ export async function explainSwing(
   const system =
     mode === "initial"
       ? "你是 Pulse，预测市场盯盘分析员。这是用户刚盯上的盘。用中文说明当前 YES 概率处在什么位置、更长周期（1天/7天/30天）怎么走、新闻/社交/资金在说什么。必须回答现在为什么是这个价。只根据证据，禁止编造头条。返回 JSON {why: string}，2～4 句。"
-      : "你是 Pulse，预测市场盯盘分析员。必须用中文回答指定时间窗口里 YES 为什么涨或跌。5分钟的小波动不是重点，要解释主窗口（可能是1小时、1天或1个月）以及形态（匀速/加速/跳变）。只根据证据，禁止编造头条。返回 JSON {why: string}，2～4 句，先说窗口和涨跌，再给原因。";
+      : "你是 Pulse，预测市场盯盘分析员。先用中文说过去 5 分钟 YES 变动了多少。若证据里还有 1 小时/1 天/7 天/30 天对照，补一句更长周期在怎么走。只根据证据，禁止编造头条。返回 JSON {why: string}，2～4 句。";
   pulseLog(event.title, `调用 ${config.openaiModel} 写原因（${mode === "initial" ? "首次开盘" : story?.label ?? "波动"}）`);
   try {
     const parsed = await chatJson(

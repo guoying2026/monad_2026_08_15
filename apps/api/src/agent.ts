@@ -98,16 +98,9 @@ export async function scanEvent(opts: {
     pulseLog(event.title, "各时间窗口都没有超过阈值的变动");
   }
 
-  const notify = shouldNotify({
-    initial,
-    force,
-    story,
-    lastStory: opts.lastStory,
-    lastFiredYes: opts.lastFiredYes ?? opts.prevYes,
-    yes: event.yesPrice,
-  });
+  const notify = shouldNotify({ initial, story });
   if (!notify) {
-    pulseLog(event.title, "变动还不够成一条新故事，本轮不通知");
+    pulseLog(event.title, "没有可对比的 5 分钟价格，本轮不通知");
     return { eventId: event.id, checkedAt, quotes: [currentQuote] };
   }
 

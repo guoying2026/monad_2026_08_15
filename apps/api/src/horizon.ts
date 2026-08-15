@@ -1,4 +1,4 @@
-export type HorizonKey = "1h" | "6h" | "1d" | "7d" | "30d";
+export type HorizonKey = "5m" | "1h" | "6h" | "1d" | "7d" | "30d";
 export type TrendKind = "steady_up" | "steady_down" | "sudden" | "accelerating" | "choppy";
 
 export type PriceQuote = {
@@ -21,6 +21,7 @@ export type MoveStory = {
 };
 
 const HORIZONS: { key: HorizonKey; ms: number; label: string; minPts: number }[] = [
+  { key: "5m", ms: 5 * 60_000, label: "过去 5 分钟", minPts: 0 },
   { key: "1h", ms: 60 * 60_000, label: "过去 1 小时", minPts: 0.05 },
   { key: "6h", ms: 6 * 60 * 60_000, label: "过去 6 小时", minPts: 0.06 },
   { key: "1d", ms: 24 * 60 * 60_000, label: "过去 1 天", minPts: 0.08 },
@@ -108,7 +109,7 @@ export function buildStory(opts: {
 
   const others: { label: string; delta: number; key: HorizonKey; from: number; crossed: boolean; trend: ReturnType<typeof trendOf> }[] = [];
   for (const h of HORIZONS) {
-    const start = nearest(series, opts.now - h.ms, h.ms * 0.35);
+    const start = nearest(series, opts.now - h.ms, h.key === "5m" ? 12 * 60_000 : h.ms * 0.35);
     if (!start) continue;
     const delta = opts.yes - start.yes;
     const points = [...inWindow(series, opts.now - h.ms, opts.now), { at: opts.now, yes: opts.yes, volume: 0 }];
@@ -122,64 +123,42 @@ export function buildStory(opts: {
     });
   }
 
+  const five = others.find((row) => row.key === "5m");
+  const fiveFrom = five?.from ?? opts.lastFiredYes ?? series.at(-2)?.yes;
   const sinceLast =
-    opts.lastFiredYes != null
-      ? { from: opts.lastFiredYes, to: opts.yes, delta: opts.yes - opts.lastFiredYes }
-      : undefined;
+    fiveFrom != null
+      ? { from: fiveFrom, to: opts.yes, delta: opts.yes - fiveFrom }
+      : opts.lastFiredYes != null
+        ? { from: opts.lastFiredYes, to: opts.yes, delta: opts.yes - opts.lastFiredYes }
+        : undefined;
 
-  const crossed = others.filter((row) => row.crossed);
-  const suddenShort = crossed.find((row) => (row.key === "1h" || row.key === "6h") && row.trend.kind === "sudden");
-  const longest = [...crossed].sort((a, b) => HORIZONS.findIndex((h) => h.key === b.key) - HORIZONS.findIndex((h) => h.key === a.key))[0];
-  const pick = suddenShort && Math.abs(suddenShort.delta) >= 0.05 ? suddenShort : longest;
+  const longer = others.filter((row) => row.key !== "5m");
+  const context = longer.map((row) => ({ label: row.label, delta: row.delta }));
 
-  if (pick) {
-    return {
-      window: pick.key,
-      label: pick.label,
-      from: pick.from,
-      to: opts.yes,
-      delta: pick.delta,
-      trend: pick.trend.kind,
-      trendLabel: pick.trend.label,
-      sinceLast,
-      others: others.map((row) => ({ label: row.label, delta: row.delta })),
-      key: `${pick.key}:${pick.delta >= 0 ? "up" : "down"}:${pick.trend.kind}`,
+  if (sinceLast) {
+    const fiveTrend = five?.trend ?? {
+      kind: Math.abs(sinceLast.delta) >= 0.02 ? "sudden" : "choppy",
+      label: Math.abs(sinceLast.delta) >= 0.02 ? TREND_LABEL.sudden : TREND_LABEL.choppy,
     };
-  }
-
-  if (sinceLast && Math.abs(sinceLast.delta) >= 0.035) {
     return {
-      window: "since_last",
-      label: "距上次通知",
+      window: "5m",
+      label: "过去 5 分钟",
       from: sinceLast.from,
       to: sinceLast.to,
       delta: sinceLast.delta,
-      trend: Math.abs(sinceLast.delta) >= 0.05 ? "sudden" : "choppy",
-      trendLabel: Math.abs(sinceLast.delta) >= 0.05 ? TREND_LABEL.sudden : TREND_LABEL.choppy,
+      trend: fiveTrend.kind,
+      trendLabel: fiveTrend.label,
       sinceLast,
-      others: others.map((row) => ({ label: row.label, delta: row.delta })),
-      key: `since_last:${sinceLast.delta >= 0 ? "up" : "down"}`,
+      others: context,
+      key: `5m:${sinceLast.delta >= 0 ? "up" : "down"}:${fiveTrend.kind}`,
     };
   }
 
   return null;
 }
 
-export function shouldNotify(opts: {
-  initial?: boolean;
-  force?: boolean;
-  story: MoveStory | null;
-  lastStory?: string;
-  lastFiredYes?: number;
-  yes: number;
-}) {
-  if (opts.initial) return true;
-  if (!opts.story) return false;
-  if (opts.force) return true;
-  const since = opts.lastFiredYes != null ? Math.abs(opts.yes - opts.lastFiredYes) : 1;
-  if (since >= 0.035) return true;
-  if (opts.story.key !== opts.lastStory && Math.abs(opts.story.delta) >= 0.05) return true;
-  return false;
+export function shouldNotify(opts: { initial?: boolean; story: MoveStory | null }) {
+  return Boolean(opts.initial || opts.story);
 }
 
 export function storyLine(story: MoveStory) {
