@@ -18,7 +18,6 @@ export default function HomePage() {
   }, []);
 
   const agentId = cfg?.agentId || publicAgentId || null;
-  const scan = cfg?.scan8004 || network.scan8004(agentId || undefined);
   const registry = cfg?.identityRegistry || network.identityRegistry;
   const payTo = cfg?.payTo || "";
 
@@ -36,9 +35,6 @@ export default function HomePage() {
         <Link href="/scan" className="btn-primary">
           {t("homeCtaScan")}
         </Link>
-        <a href={scan} target="_blank" rel="noreferrer" className="btn-ghost">
-          {t("homeCtaScan8004")}
-        </a>
       </div>
 
       <section className="mt-12 grid gap-4 md:grid-cols-3">
