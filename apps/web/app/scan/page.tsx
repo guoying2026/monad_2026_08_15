@@ -106,7 +106,6 @@ export default function ScanPage() {
       if (!address) throw new Error(t("errConnect"));
       const mail = email.trim();
       const tg = chatId.trim();
-      if (mail && tg) throw new Error(t("errChannelBoth"));
       if (!mail && !tg) throw new Error(t("errChannelNone"));
       if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
         throw new Error(t("errEmail"));
