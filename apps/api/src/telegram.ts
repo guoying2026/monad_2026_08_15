@@ -1,14 +1,14 @@
 import { telegramCreds } from "./config.js";
 
 export async function sendTelegram(chatId: string, text: string): Promise<boolean> {
-  const { token, defaultChat } = telegramCreds();
-  const to = chatId.trim() || defaultChat.trim();
+  const { token } = telegramCreds();
+  const to = chatId.trim();
   if (!token) {
     console.log("[telegram] skip：.env 里没有 TELEGRAM_BOT_TOKEN，改完请重启 API");
     return false;
   }
   if (!to) {
-    console.log("[telegram] skip：没有 chatId");
+    console.log("[telegram] skip：订阅表没有 chat_id，这个用户不发 Telegram");
     return false;
   }
 

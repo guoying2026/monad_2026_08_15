@@ -117,7 +117,7 @@ export async function scanEvent(opts: {
 
   const alerts: AlertRecord[] = [];
   for (const sub of members) {
-    pulseLog(event.title, `发通知  邮箱=${sub.email || "无"}  Telegram=${sub.chatId || "无"}`);
+    pulseLog(event.title, `发通知  订阅 ${sub.id}  邮箱=${sub.email || "无"}  Telegram=${sub.chatId || "无"}（来自 subscriptions 表）`);
     const telegramOk = await sendTelegram(sub.chatId, body);
     const emailOk = sub.email ? await sendEmail(sub.email, `Pulse · ${event.title}`, body.replace(/<[^>]+>/g, "")) : false;
     pulseLog(event.title, `通知结果  邮件=${emailOk ? "已发" : "未发"}  Telegram=${telegramOk ? "已发" : "未发"}`);

@@ -127,7 +127,7 @@ app.post("/scan", async (req, res) => {
 app.post("/subscribe", async (req, res) => {
   const eventId = String(req.body?.eventId ?? "");
   const wallet = String(req.body?.wallet ?? "");
-  const chatId = String(req.body?.chatId ?? config.telegramDefaultChat ?? "").trim();
+  const chatId = String(req.body?.chatId ?? "").trim();
   const email = String(req.body?.email ?? "").trim();
   if (email && !validEmail(email)) {
     res.status(400).json({ error: "invalid email" });
