@@ -189,6 +189,11 @@ app.get("/subscriptions", async (req, res) => {
   res.json({ subscriptions: await store.listSubscriptions(wallet || undefined) });
 });
 
+app.get("/payments", async (req, res) => {
+  const wallet = readQuery(req, "wallet");
+  res.json({ payments: await store.listPayments(wallet || undefined) });
+});
+
 app.get("/alerts", async (req, res) => {
   const wallet = readQuery(req, "wallet");
   const [alerts, scans] = await Promise.all([

@@ -1,14 +1,34 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { useI18n } from "@/lib/i18n";
 import { useTheme } from "@/lib/theme";
 import { monadChain } from "@/lib/chain";
 
+function navActive(path: string, hash: string, href: string) {
+  const [base, targetHash] = href.split("#");
+  if (targetHash) return path === base && hash === `#${targetHash}`;
+  if (base === "/alerts") return path === "/alerts" && hash !== "#payments";
+  return path === href;
+}
+
+function useHash() {
+  const [hash, setHash] = useState("");
+  useEffect(() => {
+    const sync = () => setHash(window.location.hash);
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  return hash;
+}
+
 export function Nav() {
   const path = usePathname();
+  const hash = useHash();
   const { t, locale, setLocale } = useI18n();
   const { theme, toggle } = useTheme();
   const { address, isConnected, chainId } = useAccount();
@@ -20,6 +40,7 @@ export function Nav() {
     { href: "/", label: t("navAgent") },
     { href: "/scan", label: t("navScan") },
     { href: "/alerts", label: t("navAlerts") },
+    { href: "/alerts#payments", label: t("navPayments") },
   ];
 
   return (
@@ -36,7 +57,7 @@ export function Nav() {
             <Link
               key={l.href}
               href={l.href}
-              className={path === l.href ? "font-medium text-fg" : "hover:text-fg"}
+              className={navActive(path, hash, l.href) ? "font-medium text-fg" : "hover:text-fg"}
             >
               {l.label}
             </Link>
@@ -110,7 +131,7 @@ export function Nav() {
           <Link
             key={l.href}
             href={l.href}
-            className={path === l.href ? "font-medium text-fg" : ""}
+            className={navActive(path, hash, l.href) ? "font-medium text-fg" : ""}
           >
             {l.label}
           </Link>

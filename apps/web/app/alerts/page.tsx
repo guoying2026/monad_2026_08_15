@@ -3,24 +3,34 @@
 import { Suspense, useEffect, useState } from "react";
 import { useAccount } from "wagmi";
 import type { AlertRecord, Subscription } from "@pulse/shared";
-import { fetchHistory, fetchSubscriptions, postTick } from "@/lib/api";
+import { fetchHistory, fetchPayments, fetchSubscriptions, postTick } from "@/lib/api";
+import { CopyButton } from "@/components/copy-button";
 import { useI18n } from "@/lib/i18n";
+import { network } from "@/lib/chain";
+
+function shortHash(value: string) {
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
 
 function AlertsInner() {
   const { t } = useI18n();
   const { address } = useAccount();
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [watches, setWatches] = useState<Subscription[]>([]);
+  const [payments, setPayments] = useState<Subscription[]>([]);
   const [tickBusy, setTickBusy] = useState(false);
   const [tickNote, setTickNote] = useState<string | null>(null);
 
   async function refreshTape() {
-    const [history, subs] = await Promise.all([
+    const [history, subs, pay] = await Promise.all([
       fetchHistory(address),
       fetchSubscriptions(address),
+      fetchPayments(address),
     ]);
     setAlerts(history.alerts);
     setWatches(subs.subscriptions.filter((s) => s.active));
+    setPayments(pay.payments);
   }
 
   useEffect(() => {
@@ -66,11 +76,60 @@ function AlertsInner() {
                 {w.email || w.chatId
                   ? [w.email, w.chatId ? "Telegram" : ""].filter(Boolean).join(" · ")
                   : t("watchingNone")}
+                {w.paid ? ` · $${w.paidUsdc || 0.01}` : ""}
               </dd>
             </div>
           ))}
         </div>
         {tickNote && <p className="px-5 pb-4 text-xs text-muted">{tickNote}</p>}
+      </section>
+
+      <section id="payments" className="surface mt-8 overflow-hidden rounded-card">
+        <div className="border-b border-line px-5 py-3" style={{ background: "var(--accent-soft)" }}>
+          <h2 className="text-sm font-semibold">{t("paymentTitle")}</h2>
+        </div>
+        <div className="divide-y divide-line">
+          {payments.length === 0 && <p className="px-5 py-4 text-sm text-muted">{t("paymentEmpty")}</p>}
+          {payments.map((p) => (
+            <article key={p.id} className="px-5 py-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs text-muted">
+                <span>{new Date(p.createdAt).toLocaleString()}</span>
+                <span className="rounded-full bg-chip px-2 py-0.5 font-medium text-fg">
+                  {p.paid
+                    ? t("paymentPaid", { amount: String(p.paidUsdc || 0.01) })
+                    : t("paymentUnpaid")}
+                </span>
+              </div>
+              <h3 className="mt-2 text-sm font-medium">{p.eventTitle}</h3>
+              <p className="mt-1 text-xs text-muted">
+                {t("paymentWallet")} {shortHash(p.wallet)}
+              </p>
+              {p.paymentTx ? (
+                <div className="mt-2 flex items-center gap-1.5 text-xs">
+                  <a
+                    href={network.explorerTx(p.paymentTx)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-accent underline-offset-2 hover:underline"
+                  >
+                    {shortHash(p.paymentTx)}
+                  </a>
+                  <CopyButton value={p.paymentTx} />
+                  <a
+                    href={network.explorerTx(p.paymentTx)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-muted underline-offset-2 hover:underline"
+                  >
+                    {t("paymentOpenTx")}
+                  </a>
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-muted">{t("paymentNoTx")}</p>
+              )}
+            </article>
+          ))}
+        </div>
       </section>
 
       <h2 className="mt-10 text-sm font-semibold text-fg">{t("alertHistory")}</h2>

@@ -154,6 +154,31 @@ export const store = {
     await migrateJsonOnce();
   },
 
+  async listPayments(wallet?: string) {
+    await dbReady();
+    if (wallet) {
+      const [rows] = await pool.query<SubRow[]>(
+        `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+                last_yes_price, last_volume, last_fired_at, create_time, update_time
+         FROM subscriptions
+         WHERE wallet = ?
+         ORDER BY create_time DESC
+         LIMIT ?`,
+        [wallet.toLowerCase(), LIST_LIMIT],
+      );
+      return rows.map(asSub);
+    }
+    const [rows] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       ORDER BY create_time DESC
+       LIMIT ?`,
+      [LIST_LIMIT],
+    );
+    return rows.map(asSub);
+  },
+
   async listSubscriptions(wallet?: string) {
     await dbReady();
     if (wallet) {
