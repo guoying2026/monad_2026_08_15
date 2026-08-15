@@ -130,54 +130,42 @@ function AlertsInner() {
                     {t("paymentOpenTx")}
                   </a>
                 </div>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  <p className="text-xs text-muted">{t("paymentNoTx")}</p>
-                  <p className="text-xs text-muted">{t("paymentNeedUsdc")}</p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <a
-                      href="https://faucet.circle.com/"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs font-medium text-accent underline-offset-2 hover:underline"
-                    >
-                      {t("paymentFaucet")}
-                    </a>
-                    <button
-                      type="button"
-                      disabled={payingId !== null || !address}
-                      onClick={() => {
-                        if (!address) return;
-                        setPayingId(p.id);
-                        setPayNote(null);
-                        void (async () => {
-                          const init: RequestInit = {
-                            method: "POST",
-                            headers: { "content-type": "application/json" },
-                            body: JSON.stringify({
-                              eventId: p.eventId,
-                              wallet: address,
-                              email: p.email,
-                              chatId: p.chatId,
-                            }),
-                          };
-                          const res =
-                            cfg && !cfg.skipX402 && walletClient
-                              ? await paidFetch(walletClient, address, `${apiUrl}/subscribe`, init)
-                              : await fetch(`${apiUrl}/subscribe`, init);
-                          if (!res.ok) throw new Error(await res.text());
-                          await refreshTape();
-                        })()
-                          .catch((err) => setPayNote(err instanceof Error ? err.message : t("feedbackFail")))
-                          .finally(() => setPayingId(null));
-                      }}
-                      className="btn-primary !px-3 !py-1 !text-xs"
-                    >
-                      {payingId === p.id ? t("paymentRetrying") : t("paymentRetry")}
-                    </button>
-                  </div>
+              ) : !p.paid ? (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    disabled={payingId !== null || !address}
+                    onClick={() => {
+                      if (!address) return;
+                      setPayingId(p.id);
+                      setPayNote(null);
+                      void (async () => {
+                        const init: RequestInit = {
+                          method: "POST",
+                          headers: { "content-type": "application/json" },
+                          body: JSON.stringify({
+                            eventId: p.eventId,
+                            wallet: address,
+                            email: p.email,
+                            chatId: p.chatId,
+                          }),
+                        };
+                        const res =
+                          cfg && !cfg.skipX402 && walletClient
+                            ? await paidFetch(walletClient, address, `${apiUrl}/subscribe`, init)
+                            : await fetch(`${apiUrl}/subscribe`, init);
+                        if (!res.ok) throw new Error(await res.text());
+                        await refreshTape();
+                      })()
+                        .catch((err) => setPayNote(err instanceof Error ? err.message : t("feedbackFail")))
+                        .finally(() => setPayingId(null));
+                    }}
+                    className="btn-primary !px-3 !py-1 !text-xs"
+                  >
+                    {payingId === p.id ? t("paymentRetrying") : t("paymentRetry")}
+                  </button>
                 </div>
-              )}
+              ) : null}
             </article>
           ))}
         </div>
