@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAccount, useWalletClient } from "wagmi";
 import type { ScanReport } from "@pulse/shared";
-import { apiUrl, fetchConfig, fetchEvents, type AgentConfig, type EventWithPool } from "@/lib/api";
+import { apiUrl, fetchConfig, fetchEvents, polymarketSlug, type AgentConfig, type EventWithPool } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { paidFetch } from "@/lib/x402";
 
@@ -375,38 +375,26 @@ function friendly(err: unknown, t: (key: "errCancelled" | "errFunds") => string)
   return message;
 }
 
-function polymarketSlug(raw: string): string | undefined {
-  const text = raw.trim();
-  try {
-    const url = new URL(text);
-    if (!url.hostname.includes("polymarket.com")) return undefined;
-    const parts = url.pathname.split("/").filter(Boolean);
-    const idx = parts.findIndex((p) => p === "event" || p === "market");
-    if (idx >= 0 && parts[idx + 1]) return decodeURIComponent(parts[idx + 1]);
-  } catch {
-    // not a URL
-  }
-  return undefined;
-}
-
 function pickSearchHit(rows: EventWithPool[], q: string): EventWithPool | undefined {
-  const slug = polymarketSlug(q);
-  if (slug) {
-    const hit = rows.find((e) => eventMatchesSlug(e, slug));
-    if (hit) return hit;
-    return undefined;
-  }
-  return rows[0];
+  const slug = polymarketSlug(q) || q.trim();
+  if (!slug) return rows[0];
+  const hit = rows.find((e) => eventMatchesSlug(e, slug));
+  if (hit) return hit;
+  return polymarketSlug(q) ? undefined : rows[0];
 }
 
 function eventMatchesSlug(event: EventWithPool, slug: string): boolean {
   const tail = event.url.split("/").filter(Boolean).pop() ?? "";
+  const blob = [event.id, event.url, event.title, event.question, ...(event.outcomes ?? []).map((o) => o.id)]
+    .join(" ")
+    .toLowerCase();
   return (
     event.id === slug ||
     tail === slug ||
     event.url.includes(`/event/${slug}`) ||
     event.url.includes(`/market/${slug}`) ||
     slug.startsWith(`${tail}-`) ||
-    tail.startsWith(`${slug}-`)
+    tail.startsWith(`${slug}-`) ||
+    blob.includes(slug.toLowerCase())
   );
 }

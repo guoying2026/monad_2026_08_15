@@ -96,8 +96,8 @@ function fromGamma(event: GammaEvent): MarketEvent | null {
     .filter((row) => row.id);
 
   const lead = [...outcomes].sort((a, b) => b.yesPrice - a.yesPrice)[0];
-  const slug = event.slug || markets[0]?.slug || String(event.id ?? "");
-  const id = String(event.id ?? lead?.id ?? slug);
+  const slug = event.slug || String(event.id ?? "");
+  const id = String(event.id ?? slug);
 
   return {
     id,
@@ -149,6 +149,12 @@ function parseQuery(raw: string): { slugs: string[]; text: string } {
     }
   } catch {
     // not a URL
+  }
+  if (/^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(text)) {
+    const slugs = [text];
+    const stripped = text.replace(/-\d+$/, "");
+    if (stripped && stripped !== text) slugs.push(stripped);
+    return { slugs, text };
   }
   return { slugs: [], text };
 }

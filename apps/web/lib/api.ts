@@ -35,10 +35,26 @@ export async function fetchConfig(): Promise<AgentConfig> {
 }
 
 export async function fetchEvents(query?: string): Promise<EventWithPool[]> {
-  const q = query?.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+  const raw = query?.trim() ?? "";
+  const needle = polymarketSlug(raw) || raw;
+  const q = needle ? `?q=${encodeURIComponent(needle)}` : "";
   const res = await fetch(`${apiUrl}/events${q}`);
   const data = (await res.json()) as { events: EventWithPool[] };
-  return data.events;
+  return data.events ?? [];
+}
+
+export function polymarketSlug(raw: string): string | undefined {
+  const text = raw.trim();
+  try {
+    const url = new URL(text);
+    if (!url.hostname.includes("polymarket.com")) return undefined;
+    const parts = url.pathname.split("/").filter(Boolean);
+    const idx = parts.findIndex((p) => p === "event" || p === "market");
+    if (idx >= 0 && parts[idx + 1]) return decodeURIComponent(parts[idx + 1]);
+  } catch {
+    // not a URL
+  }
+  return undefined;
 }
 
 export async function fetchHistory(wallet?: string) {

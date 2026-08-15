@@ -16,6 +16,15 @@ const app = express();
 app.use(cors({ exposedHeaders: ["payment-required", "payment-response", "x-payment-response"] }));
 app.use(express.json({ limit: "1mb" }));
 
+function readQuery(req: { query: Record<string, unknown>; originalUrl?: string; url?: string }, key: string): string {
+  const raw = req.query[key];
+  const fromExpress = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof fromExpress === "string" && fromExpress.trim()) return fromExpress.trim();
+  const href = req.originalUrl || req.url || "";
+  const qs = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
+  return new URLSearchParams(qs).get(key)?.trim() ?? "";
+}
+
 app.use(createX402Middleware());
 
 function card() {
@@ -62,7 +71,7 @@ app.get("/config", (_req, res) => {
 });
 
 app.get("/events", async (req, res) => {
-  const q = String(req.query.q ?? "").trim();
+  const q = readQuery(req, "q");
   const events = q ? await searchEvents(q) : await listEvents();
   res.json({
     events: events.map((event) => ({
@@ -159,13 +168,13 @@ app.post("/subscribe", async (req, res) => {
 });
 
 app.get("/subscriptions", (req, res) => {
-  const wallet = String(req.query.wallet ?? "");
+  const wallet = readQuery(req, "wallet");
   const rows = store.listSubscriptions();
   res.json({ subscriptions: wallet ? rows.filter((s) => s.wallet.toLowerCase() === wallet.toLowerCase()) : rows });
 });
 
 app.get("/alerts", (req, res) => {
-  const wallet = String(req.query.wallet ?? "");
+  const wallet = readQuery(req, "wallet");
   const subs = new Set(
     store
       .listSubscriptions()
@@ -258,9 +267,16 @@ app.post("/internal/tick", async (_req, res) => {
   res.json({ fired: fired.length, ids: fired, events: eventIds.length });
 });
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`Pulse API  http://localhost:${config.port}`);
   console.log(`network    ${config.network.displayName} (${config.network.caip2})`);
   console.log(`x402       ${config.skipX402 ? "SKIPPED" : config.x402Price + " → " + config.payTo}`);
   console.log(`card       http://localhost:${config.port}/.well-known/agent-card.json`);
+});
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`[api] port ${config.port} already in use — stop the old Pulse API first`);
+    process.exit(1);
+  }
+  throw err;
 });
