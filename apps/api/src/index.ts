@@ -4,7 +4,7 @@ import express from "express";
 import { buildAgentCard } from "@pulse/agent-card";
 import { reputationAbi } from "@pulse/shared";
 import { config } from "./config.js";
-import { formatUsdc, WATCH_COST_USDC, type AlertRecord } from "@pulse/shared";
+import { formatUsdc, WATCH_COST_USDC, quoteJoin, type AlertRecord } from "@pulse/shared";
 import { analyzeEvent, alertReason } from "./llm.js";
 import { detectSwing, getEvent, listEvents, searchEvents } from "./markets.js";
 import { store } from "./store.js";
@@ -73,18 +73,19 @@ app.get("/config", (_req, res) => {
 app.get("/events", async (req, res) => {
   const q = readQuery(req, "q");
   const events = q ? await searchEvents(q) : await listEvents();
+  const quotes = await store.quotesFor(events.map((event) => event.id));
   res.json({
     events: events.map((event) => ({
       ...event,
-      pool: store.quoteFor(event.id),
+      pool: quotes.get(event.id) ?? quoteJoin(0, event.id),
     })),
   });
 });
 
-app.get("/pools/:eventId", (req, res) => {
+app.get("/pools/:eventId", async (req, res) => {
   res.json({
-    pool: store.getPool(req.params.eventId) ?? null,
-    quote: store.quoteFor(req.params.eventId),
+    pool: (await store.getPool(req.params.eventId)) ?? null,
+    quote: await store.quoteFor(req.params.eventId),
   });
 });
 
@@ -94,7 +95,7 @@ app.get("/events/:id", async (req, res) => {
     res.status(404).json({ error: "event not found" });
     return;
   }
-  res.json({ event, pool: store.quoteFor(event.id) });
+  res.json({ event, pool: await store.quoteFor(event.id) });
 });
 
 app.post("/scan", async (req, res) => {
@@ -110,7 +111,7 @@ app.post("/scan", async (req, res) => {
   }
 
   const analysis = await analyzeEvent(event);
-  const report = store.addScan({
+  const report = await store.addScan({
     id: randomUUID(),
     eventId: event.id,
     event,
@@ -143,7 +144,7 @@ app.post("/subscribe", async (req, res) => {
     return;
   }
 
-  const joined = store.joinWatch({
+  const joined = await store.joinWatch({
     id: randomUUID(),
     wallet,
     eventId: event.id,
@@ -163,34 +164,30 @@ app.post("/subscribe", async (req, res) => {
 
   res.json({
     subscription: joined.subscription,
-    quote: "quote" in joined ? joined.quote : store.quoteFor(event.id),
+    quote: "quote" in joined ? joined.quote : await store.quoteFor(event.id),
   });
 });
 
-app.get("/subscriptions", (req, res) => {
+app.get("/subscriptions", async (req, res) => {
   const wallet = readQuery(req, "wallet");
-  const rows = store.listSubscriptions();
-  res.json({ subscriptions: wallet ? rows.filter((s) => s.wallet.toLowerCase() === wallet.toLowerCase()) : rows });
+  res.json({ subscriptions: await store.listSubscriptions(wallet || undefined) });
 });
 
-app.get("/alerts", (req, res) => {
+app.get("/alerts", async (req, res) => {
   const wallet = readQuery(req, "wallet");
-  const subs = new Set(
-    store
-      .listSubscriptions()
-      .filter((s) => !wallet || s.wallet.toLowerCase() === wallet.toLowerCase())
-      .map((s) => s.id),
-  );
-  const alerts = store.listAlerts().filter((a) => !wallet || subs.has(a.subscriptionId));
-  res.json({ alerts, scans: wallet ? store.listScans() : store.listScans() });
+  const [alerts, scans] = await Promise.all([
+    store.listAlerts(wallet || undefined),
+    store.listScans(),
+  ]);
+  res.json({ alerts, scans });
 });
 
-app.get("/scans", (_req, res) => {
-  res.json({ scans: store.listScans() });
+app.get("/scans", async (_req, res) => {
+  res.json({ scans: await store.listScans() });
 });
 
-app.get("/scans/:id", (req, res) => {
-  const report = store.getScan(req.params.id);
+app.get("/scans/:id", async (req, res) => {
+  const report = await store.getScan(req.params.id);
   if (!report) {
     res.status(404).json({ error: "scan not found" });
     return;
@@ -200,20 +197,29 @@ app.get("/scans/:id", (req, res) => {
 
 app.post("/internal/tick", async (_req, res) => {
   const fired: string[] = [];
-  const eventIds = store.listWatchedEventIds();
+  const eventIds = await store.listWatchedEventIds();
+  const snap = await store.loadWatchSnapshot(eventIds);
+  const poolUpdates: { eventId: string; eventTitle: string; lastYesPrice: number; lastVolume: number; lastFiredAt?: string; updatedAt: string }[] = [];
+  const ticks: { eventId: string; eventTitle: string; lastYesPrice: number; lastVolume: number; lastFiredAt: string; alerts: AlertRecord[]; memberIds: string[] }[] = [];
 
   for (const eventId of eventIds) {
     const event = await getEvent(eventId);
     if (!event) continue;
 
-    const members = store.activeForEvent(eventId);
+    const members = snap.members.get(eventId) ?? [];
     if (members.length === 0) continue;
 
-    const pool = store.getPool(eventId);
+    const pool = snap.pools.get(eventId);
     const prevYes = pool?.lastYesPrice ?? members[0]?.lastYesPrice;
     const prevVolume = pool?.lastVolume ?? members[0]?.lastVolume;
     if (prevYes == null || prevVolume == null) {
-      store.updatePool(eventId, { lastYesPrice: event.yesPrice, lastVolume: event.volume });
+      poolUpdates.push({
+        eventId,
+        eventTitle: event.title,
+        lastYesPrice: event.yesPrice,
+        lastVolume: event.volume,
+        updatedAt: new Date().toISOString(),
+      });
       continue;
     }
 
@@ -255,7 +261,8 @@ app.post("/internal/tick", async (_req, res) => {
       fired.push(sub.id);
     }
 
-    store.commitTick(eventId, {
+    ticks.push({
+      eventId: event.id,
       eventTitle: event.title,
       lastYesPrice: event.yesPrice,
       lastVolume: event.volume,
@@ -264,19 +271,23 @@ app.post("/internal/tick", async (_req, res) => {
       memberIds: members.map((s) => s.id),
     });
   }
+
+  await store.applyWatchResults(poolUpdates, ticks);
   res.json({ fired: fired.length, ids: fired, events: eventIds.length });
 });
 
-const server = app.listen(config.port, () => {
-  console.log(`Pulse API  http://localhost:${config.port}`);
-  console.log(`network    ${config.network.displayName} (${config.network.caip2})`);
-  console.log(`x402       ${config.skipX402 ? "SKIPPED" : config.x402Price + " → " + config.payTo}`);
-  console.log(`card       http://localhost:${config.port}/.well-known/agent-card.json`);
-});
-server.on("error", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(`[api] port ${config.port} already in use — stop the old Pulse API first`);
-    process.exit(1);
-  }
-  throw err;
+void store.ready().then(() => {
+  const server = app.listen(config.port, () => {
+    console.log(`Pulse API  http://localhost:${config.port}`);
+    console.log(`network    ${config.network.displayName} (${config.network.caip2})`);
+    console.log(`x402       ${config.skipX402 ? "SKIPPED" : config.x402Price + " → " + config.payTo}`);
+    console.log(`card       http://localhost:${config.port}/.well-known/agent-card.json`);
+  });
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`[api] port ${config.port} already in use — stop the old Pulse API first`);
+      process.exit(1);
+    }
+    throw err;
+  });
 });

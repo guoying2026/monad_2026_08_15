@@ -32,4 +32,5 @@ export const config = {
   telegramDefaultChat: env("TELEGRAM_DEFAULT_CHAT_ID"),
   resendKey: env("RESEND_API_KEY"),
   emailFrom: env("EMAIL_FROM", "Pulse <onboarding@resend.dev>"),
+  databaseUrl: env("DATABASE_URL", "mysql://root@127.0.0.1:3306/pulse"),
 };

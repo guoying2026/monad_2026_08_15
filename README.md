@@ -88,7 +88,7 @@ curl -s -X POST http://localhost:4000/scan \
 
 `POST /subscribe`：`wallet`、`eventId`、`email` / `chatId`（渠道选填，可只填一个）。每个事件一律 $0.01。不设阈值——Worker 对每个事件只跑一次，再按人推邮箱或 Telegram。
 
-订阅按事件落盘：`apps/.data/events/<eventId>.json`（邮箱、Telegram、提醒都在对应事件文件里）。
+订阅和通知落 MySQL（默认 `mysql://root@127.0.0.1:3306/pulse`）。刷新、重启都还在。首次启动会把旧的 `apps/.data/events/*.json` 迁进去。
 
 Worker 默认 20s 打一次 `/internal/tick`。没配 Telegram 时只打日志，前端 `/alerts` 仍能看到原因文案。Demo 市场的赔率会漂移，方便当场触发。
 

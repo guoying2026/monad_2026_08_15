@@ -1,155 +1,248 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { RowDataPacket } from "mysql2";
 import type { AlertRecord, ScanReport, Subscription, WatchPool } from "@pulse/shared";
-import { quoteJoin, WATCH_COST_USDC } from "@pulse/shared";
+import { quoteJoin, WATCH_COST_USDC, type PoolQuote } from "@pulse/shared";
+import { dbReady, pool } from "./db.js";
 
-type EventDoc = {
-  eventId: string;
-  eventTitle: string;
-  lastYesPrice?: number;
-  lastVolume?: number;
-  lastFiredAt?: string;
-  updatedAt: string;
-  subscriptions: Subscription[];
-  alerts: AlertRecord[];
-  scans: ScanReport[];
-};
-
+const LIST_LIMIT = 50;
+const IN_LIMIT = 100;
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), "../../.data");
 const eventsDir = join(dataDir, "events");
-const legacyFile = join(dataDir, "store.json");
 
-function safeName(eventId: string) {
-  const cleaned = eventId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
-  return cleaned || "event";
+type EventRow = RowDataPacket & {
+  event_id: string;
+  event_title: string;
+  last_yes_price: number | null;
+  last_volume: number | null;
+  last_fired_at: string | null;
+  create_time: Date | string;
+  update_time: Date | string;
+};
+
+type SubRow = RowDataPacket & {
+  id: string;
+  event_id: string;
+  wallet: string;
+  event_title: string;
+  chat_id: string;
+  email: string;
+  paid: number;
+  paid_usdc: number;
+  payment_tx: string | null;
+  active: number;
+  last_yes_price: number | null;
+  last_volume: number | null;
+  last_fired_at: string | null;
+  create_time: Date | string;
+  update_time: Date | string;
+};
+
+type AlertRow = RowDataPacket & {
+  id: string;
+  subscription_id: string;
+  event_id: string;
+  event_title: string;
+  reason: string;
+  snapshot_json: unknown;
+  telegram_ok: number;
+  email_ok: number;
+  payment_tx: string | null;
+  create_time: Date | string;
+  update_time: Date | string;
+};
+
+type ScanRow = RowDataPacket & {
+  id: string;
+  event_id: string;
+  payload_json: unknown;
+  create_time: Date | string;
+  update_time: Date | string;
+};
+
+function isoTime(v: Date | string | null | undefined): string {
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "string" && v) {
+    const parsed = new Date(v);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return new Date().toISOString();
 }
 
-function eventPath(eventId: string) {
-  return join(eventsDir, `${safeName(eventId)}.json`);
-}
-
-function emptyDoc(eventId: string, eventTitle = eventId): EventDoc {
+function asSub(row: SubRow): Subscription {
   return {
-    eventId,
-    eventTitle,
-    updatedAt: new Date().toISOString(),
-    subscriptions: [],
-    alerts: [],
-    scans: [],
+    id: row.id,
+    wallet: row.wallet,
+    eventId: row.event_id,
+    eventTitle: row.event_title,
+    chatId: row.chat_id,
+    email: row.email,
+    paid: Boolean(row.paid),
+    paidUsdc: Number(row.paid_usdc),
+    paymentTx: row.payment_tx ?? undefined,
+    active: Boolean(row.active),
+    lastYesPrice: row.last_yes_price ?? undefined,
+    lastVolume: row.last_volume ?? undefined,
+    lastFiredAt: row.last_fired_at ?? undefined,
+    createdAt: isoTime(row.create_time),
   };
 }
 
-function readDoc(eventId: string): EventDoc {
-  try {
-    const raw = JSON.parse(readFileSync(eventPath(eventId), "utf8")) as Partial<EventDoc>;
-    return {
-      ...emptyDoc(eventId, raw.eventTitle || eventId),
-      ...raw,
-      eventId: raw.eventId || eventId,
-      subscriptions: raw.subscriptions ?? [],
-      alerts: raw.alerts ?? [],
-      scans: raw.scans ?? [],
-    };
-  } catch {
-    return emptyDoc(eventId);
-  }
+function asPool(row: EventRow): WatchPool {
+  return {
+    eventId: row.event_id,
+    eventTitle: row.event_title,
+    lastYesPrice: row.last_yes_price ?? undefined,
+    lastVolume: row.last_volume ?? undefined,
+    lastFiredAt: row.last_fired_at ?? undefined,
+    updatedAt: isoTime(row.update_time),
+  };
 }
 
-function writeDoc(doc: EventDoc) {
-  mkdirSync(eventsDir, { recursive: true });
-  doc.updatedAt = new Date().toISOString();
-  const dest = eventPath(doc.eventId);
-  const tmp = `${dest}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(doc, null, 2));
-  renameSync(tmp, dest);
+function asAlert(row: AlertRow): AlertRecord {
+  const snapshot =
+    typeof row.snapshot_json === "string" ? JSON.parse(row.snapshot_json) : row.snapshot_json;
+  return {
+    id: row.id,
+    subscriptionId: row.subscription_id,
+    eventId: row.event_id,
+    eventTitle: row.event_title,
+    reason: row.reason,
+    snapshot: snapshot as AlertRecord["snapshot"],
+    telegramOk: Boolean(row.telegram_ok),
+    emailOk: Boolean(row.email_ok),
+    paymentTx: row.payment_tx ?? undefined,
+    createdAt: isoTime(row.create_time),
+  };
 }
 
-function listDocs(): EventDoc[] {
-  migrateLegacy();
-  if (!existsSync(eventsDir)) return [];
-  return readdirSync(eventsDir)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => {
-      try {
-        return JSON.parse(readFileSync(join(eventsDir, name), "utf8")) as EventDoc;
-      } catch {
-        return null;
-      }
-    })
-    .filter((doc): doc is EventDoc => Boolean(doc?.eventId));
+function asScan(row: ScanRow): ScanReport {
+  const payload = typeof row.payload_json === "string" ? JSON.parse(row.payload_json) : row.payload_json;
+  return payload as ScanReport;
 }
 
-let migrated = false;
-
-function migrateLegacy() {
-  if (migrated) return;
-  migrated = true;
-  if (!existsSync(legacyFile)) return;
-  try {
-    const raw = JSON.parse(readFileSync(legacyFile, "utf8")) as {
-      subscriptions?: Subscription[];
-      alerts?: AlertRecord[];
-      scans?: ScanReport[];
-      pools?: WatchPool[];
-    };
-    const ids = new Set<string>();
-    for (const row of raw.subscriptions ?? []) ids.add(row.eventId);
-    for (const row of raw.alerts ?? []) ids.add(row.eventId);
-    for (const row of raw.scans ?? []) ids.add(row.eventId);
-    for (const row of raw.pools ?? []) ids.add(row.eventId);
-
-    for (const eventId of ids) {
-      if (existsSync(eventPath(eventId))) continue;
-      const pool = raw.pools?.find((p) => p.eventId === eventId);
-      writeDoc({
-        eventId,
-        eventTitle: pool?.eventTitle || raw.subscriptions?.find((s) => s.eventId === eventId)?.eventTitle || eventId,
-        lastYesPrice: pool?.lastYesPrice,
-        lastVolume: pool?.lastVolume,
-        lastFiredAt: pool?.lastFiredAt,
-        updatedAt: pool?.updatedAt || new Date().toISOString(),
-        subscriptions: (raw.subscriptions ?? []).filter((s) => s.eventId === eventId),
-        alerts: (raw.alerts ?? []).filter((a) => a.eventId === eventId),
-        scans: (raw.scans ?? []).filter((s) => s.eventId === eventId),
-      });
-    }
-    renameSync(legacyFile, join(dataDir, "store.json.bak"));
-  } catch {
-    // keep going with empty per-event files
-  }
+function boundedIds(ids: string[]) {
+  return [...new Set(ids.filter(Boolean))].slice(0, IN_LIMIT);
 }
+
+export type TickPatch = {
+  eventId: string;
+  eventTitle: string;
+  lastYesPrice: number;
+  lastVolume: number;
+  lastFiredAt: string;
+  alerts: AlertRecord[];
+  memberIds: string[];
+};
 
 export const store = {
-  listSubscriptions() {
-    return listDocs().flatMap((doc) => doc.subscriptions ?? []);
+  async ready() {
+    await dbReady();
+    await migrateJsonOnce();
   },
-  getSubscription(id: string) {
-    for (const doc of listDocs()) {
-      const hit = doc.subscriptions?.find((s) => s.id === id);
-      if (hit) return hit;
+
+  async listSubscriptions(wallet?: string) {
+    await dbReady();
+    if (wallet) {
+      const [rows] = await pool.query<SubRow[]>(
+        `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+                last_yes_price, last_volume, last_fired_at, create_time, update_time
+         FROM subscriptions
+         WHERE wallet = ? AND active = 1
+         ORDER BY create_time DESC
+         LIMIT ?`,
+        [wallet.toLowerCase(), LIST_LIMIT],
+      );
+      return rows.map(asSub);
     }
-    return undefined;
+    const [rows] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       WHERE active = 1
+       ORDER BY create_time DESC
+       LIMIT ?`,
+      [LIST_LIMIT],
+    );
+    return rows.map(asSub);
   },
-  activeForEvent(eventId: string) {
-    migrateLegacy();
-    return readDoc(eventId).subscriptions.filter((s) => s.active);
+
+  async getSubscription(id: string) {
+    await dbReady();
+    const [rows] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       WHERE id = ?
+       LIMIT 1`,
+      [id],
+    );
+    return rows[0] ? asSub(rows[0]) : undefined;
   },
-  listWatchedEventIds() {
-    return listDocs()
-      .filter((doc) => (doc.subscriptions ?? []).some((s) => s.active))
-      .map((doc) => doc.eventId);
+
+  async activeForEvent(eventId: string) {
+    await dbReady();
+    const [rows] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       WHERE event_id = ? AND active = 1
+       ORDER BY create_time DESC
+       LIMIT ?`,
+      [eventId, LIST_LIMIT],
+    );
+    return rows.map(asSub);
   },
-  updateSubscription(eventId: string, id: string, patch: Partial<Subscription>) {
-    migrateLegacy();
-    const doc = readDoc(eventId);
-    const idx = doc.subscriptions.findIndex((s) => s.id === id);
-    if (idx < 0) return undefined;
-    doc.subscriptions[idx] = { ...doc.subscriptions[idx], ...patch };
-    writeDoc(doc);
-    return doc.subscriptions[idx];
+
+  async listWatchedEventIds() {
+    await dbReady();
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT event_id
+       FROM subscriptions
+       WHERE active = 1
+       GROUP BY event_id
+       ORDER BY MAX(create_time) DESC
+       LIMIT ?`,
+      [IN_LIMIT],
+    );
+    return rows.map((row) => String(row.event_id));
   },
-  joinWatch(input: {
+
+  async loadWatchSnapshot(eventIds: string[]) {
+    await dbReady();
+    const ids = boundedIds(eventIds);
+    const pools = new Map<string, WatchPool>();
+    const members = new Map<string, Subscription[]>();
+    for (const id of ids) members.set(id, []);
+    if (ids.length === 0) return { pools, members };
+
+    const [eventRows] = await pool.query<EventRow[]>(
+      `SELECT event_id, event_title, last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM events
+       WHERE event_id IN (?)`,
+      [ids],
+    );
+    for (const row of eventRows) pools.set(row.event_id, asPool(row));
+
+    const [subRows] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       WHERE event_id IN (?) AND active = 1
+       ORDER BY create_time DESC
+       LIMIT ?`,
+      [ids, LIST_LIMIT * ids.length],
+    );
+    for (const row of subRows) {
+      const list = members.get(row.event_id) ?? [];
+      if (list.length < LIST_LIMIT) list.push(asSub(row));
+      members.set(row.event_id, list);
+    }
+    return { pools, members };
+  },
+
+  async joinWatch(input: {
     id: string;
     wallet: string;
     eventId: string;
@@ -161,15 +254,28 @@ export const store = {
     lastYesPrice: number;
     lastVolume: number;
   }) {
-    migrateLegacy();
-    const doc = readDoc(input.eventId);
+    await dbReady();
     const wallet = input.wallet.toLowerCase();
-    const already = doc.subscriptions.find((s) => s.active && s.wallet.toLowerCase() === wallet);
-    if (already) {
-      return { error: "already-joined" as const, subscription: already };
+    const now = new Date().toISOString();
+    const [existing] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       WHERE wallet = ? AND event_id = ? AND active = 1
+       LIMIT 1`,
+      [wallet, input.eventId],
+    );
+    if (existing[0]) {
+      return { error: "already-joined" as const, subscription: asSub(existing[0]) };
     }
 
-    const quote = quoteJoin(doc.subscriptions.filter((s) => s.active).length, input.eventId);
+    await pool.query(
+      `INSERT INTO events (event_id, event_title, last_yes_price, last_volume)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE event_title = VALUES(event_title)`,
+      [input.eventId, input.eventTitle, input.lastYesPrice, input.lastVolume],
+    );
+
     const sub: Subscription = {
       id: input.id,
       wallet: input.wallet,
@@ -183,104 +289,375 @@ export const store = {
       active: true,
       lastYesPrice: input.lastYesPrice,
       lastVolume: input.lastVolume,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     };
-    doc.eventTitle = input.eventTitle;
-    if (doc.lastYesPrice == null) {
-      doc.lastYesPrice = input.lastYesPrice;
-      doc.lastVolume = input.lastVolume;
+
+    try {
+      await pool.query(
+        `INSERT INTO subscriptions
+          (id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+           last_yes_price, last_volume)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        [
+          sub.id,
+          sub.eventId,
+          wallet,
+          sub.eventTitle,
+          sub.chatId,
+          sub.email,
+          sub.paid ? 1 : 0,
+          sub.paidUsdc,
+          sub.paymentTx ?? null,
+          sub.lastYesPrice,
+          sub.lastVolume,
+        ],
+      );
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "ER_DUP_ENTRY") {
+        const [again] = await pool.query<SubRow[]>(
+          `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+                  last_yes_price, last_volume, last_fired_at, create_time, update_time
+           FROM subscriptions
+           WHERE wallet = ? AND event_id = ?
+           LIMIT 1`,
+          [wallet, input.eventId],
+        );
+        if (again[0]) return { error: "already-joined" as const, subscription: asSub(again[0]) };
+      }
+      throw err;
     }
-    doc.subscriptions.unshift(sub);
-    writeDoc(doc);
-    return { subscription: sub, quote };
+
+    const [countRows] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS members FROM subscriptions WHERE event_id = ? AND active = 1`,
+      [input.eventId],
+    );
+    return { subscription: sub, quote: quoteJoin(Number(countRows[0]?.members ?? 1), input.eventId) };
   },
-  getPool(eventId: string): WatchPool | undefined {
-    migrateLegacy();
-    if (!existsSync(eventPath(eventId))) return undefined;
-    const doc = readDoc(eventId);
-    return {
-      eventId: doc.eventId,
-      eventTitle: doc.eventTitle,
-      lastYesPrice: doc.lastYesPrice,
-      lastVolume: doc.lastVolume,
-      lastFiredAt: doc.lastFiredAt,
-      updatedAt: doc.updatedAt,
-    };
+
+  async getPool(eventId: string) {
+    await dbReady();
+    const [rows] = await pool.query<EventRow[]>(
+      `SELECT event_id, event_title, last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM events
+       WHERE event_id = ?
+       LIMIT 1`,
+      [eventId],
+    );
+    return rows[0] ? asPool(rows[0]) : undefined;
   },
-  updatePool(eventId: string, patch: Partial<WatchPool>) {
-    migrateLegacy();
-    const doc = readDoc(eventId);
-    if (patch.eventTitle) doc.eventTitle = patch.eventTitle;
-    if (patch.lastYesPrice != null) doc.lastYesPrice = patch.lastYesPrice;
-    if (patch.lastVolume != null) doc.lastVolume = patch.lastVolume;
-    if (patch.lastFiredAt) doc.lastFiredAt = patch.lastFiredAt;
-    writeDoc(doc);
-    return store.getPool(eventId);
+
+  async quotesFor(eventIds: string[]) {
+    await dbReady();
+    const ids = boundedIds(eventIds);
+    const map = new Map<string, PoolQuote>(ids.map((id) => [id, quoteJoin(0, id)]));
+    if (ids.length === 0) return map;
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT event_id, COUNT(*) AS members
+       FROM subscriptions
+       WHERE event_id IN (?) AND active = 1
+       GROUP BY event_id`,
+      [ids],
+    );
+    for (const row of rows) {
+      map.set(String(row.event_id), quoteJoin(Number(row.members), String(row.event_id)));
+    }
+    return map;
   },
-  quoteFor(eventId: string) {
-    migrateLegacy();
-    const n = existsSync(eventPath(eventId))
-      ? readDoc(eventId).subscriptions.filter((s) => s.active).length
-      : 0;
-    return quoteJoin(n, eventId);
+
+  async quoteFor(eventId: string) {
+    const map = await store.quotesFor([eventId]);
+    return map.get(eventId) ?? quoteJoin(0, eventId);
   },
-  listAlerts() {
-    return listDocs()
-      .flatMap((doc) => doc.alerts ?? [])
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  async listAlerts(wallet?: string) {
+    await dbReady();
+    if (wallet) {
+      const [rows] = await pool.query<AlertRow[]>(
+        `SELECT a.id, a.subscription_id, a.event_id, a.event_title, a.reason, a.snapshot_json,
+                a.telegram_ok, a.email_ok, a.payment_tx, a.create_time, a.update_time
+         FROM alerts a
+         INNER JOIN subscriptions s ON s.id = a.subscription_id
+         WHERE s.wallet = ?
+         ORDER BY a.create_time DESC
+         LIMIT ?`,
+        [wallet.toLowerCase(), LIST_LIMIT],
+      );
+      return rows.map(asAlert);
+    }
+    const [rows] = await pool.query<AlertRow[]>(
+      `SELECT id, subscription_id, event_id, event_title, reason, snapshot_json,
+              telegram_ok, email_ok, payment_tx, create_time, update_time
+       FROM alerts
+       ORDER BY create_time DESC
+       LIMIT ?`,
+      [LIST_LIMIT],
+    );
+    return rows.map(asAlert);
   },
-  addAlert(alert: AlertRecord) {
-    migrateLegacy();
-    const doc = readDoc(alert.eventId);
-    doc.alerts.unshift(alert);
-    writeDoc(doc);
+
+  async addAlert(alert: AlertRecord) {
+    await dbReady();
+    await pool.query(
+      `INSERT INTO alerts
+        (id, subscription_id, event_id, event_title, reason, snapshot_json, telegram_ok, email_ok, payment_tx)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        alert.id,
+        alert.subscriptionId,
+        alert.eventId,
+        alert.eventTitle,
+        alert.reason,
+        JSON.stringify(alert.snapshot),
+        alert.telegramOk ? 1 : 0,
+        alert.emailOk ? 1 : 0,
+        alert.paymentTx ?? null,
+      ],
+    );
     return alert;
   },
-  listScans() {
-    return listDocs()
-      .flatMap((doc) => doc.scans ?? [])
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  async listScans() {
+    await dbReady();
+    const [rows] = await pool.query<ScanRow[]>(
+      `SELECT id, event_id, payload_json, create_time, update_time
+       FROM scans
+       ORDER BY create_time DESC
+       LIMIT ?`,
+      [LIST_LIMIT],
+    );
+    return rows.map(asScan);
   },
-  addScan(report: ScanReport) {
-    migrateLegacy();
-    const doc = readDoc(report.eventId);
-    doc.eventTitle = report.event.title || doc.eventTitle;
-    doc.scans.unshift(report);
-    writeDoc(doc);
+
+  async addScan(report: ScanReport) {
+    await dbReady();
+    await pool.query(
+      `INSERT INTO events (event_id, event_title)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE event_title = VALUES(event_title)`,
+      [report.eventId, report.event.title || report.eventId],
+    );
+    await pool.query(
+      `INSERT INTO scans (id, event_id, payload_json) VALUES (?, ?, ?)`,
+      [report.id, report.eventId, JSON.stringify(report)],
+    );
     return report;
   },
-  getScan(id: string) {
-    for (const doc of listDocs()) {
-      const hit = doc.scans?.find((s) => s.id === id);
-      if (hit) return hit;
-    }
-    return undefined;
+
+  async getScan(id: string) {
+    await dbReady();
+    const [rows] = await pool.query<ScanRow[]>(
+      `SELECT id, event_id, payload_json, create_time, update_time FROM scans WHERE id = ? LIMIT 1`,
+      [id],
+    );
+    return rows[0] ? asScan(rows[0]) : undefined;
   },
-  commitTick(
-    eventId: string,
-    patch: {
-      eventTitle: string;
-      lastYesPrice: number;
-      lastVolume: number;
-      lastFiredAt: string;
-      alerts: AlertRecord[];
-      memberIds: string[];
-    },
-  ) {
-    migrateLegacy();
-    const doc = readDoc(eventId);
-    doc.eventTitle = patch.eventTitle;
-    doc.lastYesPrice = patch.lastYesPrice;
-    doc.lastVolume = patch.lastVolume;
-    doc.lastFiredAt = patch.lastFiredAt;
-    for (const alert of patch.alerts) doc.alerts.unshift(alert);
-    for (const id of patch.memberIds) {
-      const row = doc.subscriptions.find((s) => s.id === id);
-      if (!row) continue;
-      row.lastFiredAt = patch.lastFiredAt;
-      row.lastYesPrice = patch.lastYesPrice;
-      row.lastVolume = patch.lastVolume;
+
+  async applyWatchResults(poolUpdates: WatchPool[], ticks: TickPatch[]) {
+    await dbReady();
+    const eventMap = new Map<string, { title: string; yes: number; vol: number; firedAt?: string }>();
+    for (const row of poolUpdates) {
+      eventMap.set(row.eventId, {
+        title: row.eventTitle,
+        yes: row.lastYesPrice ?? 0,
+        vol: row.lastVolume ?? 0,
+        firedAt: row.lastFiredAt,
+      });
     }
-    writeDoc(doc);
+    for (const tick of ticks) {
+      eventMap.set(tick.eventId, {
+        title: tick.eventTitle,
+        yes: tick.lastYesPrice,
+        vol: tick.lastVolume,
+        firedAt: tick.lastFiredAt,
+      });
+    }
+
+    const eventIds = [...eventMap.keys()];
+    if (eventIds.length > 0) {
+      await pool.query(
+        `INSERT INTO events (event_id, event_title, last_yes_price, last_volume, last_fired_at)
+         VALUES ?
+         ON DUPLICATE KEY UPDATE
+           event_title = VALUES(event_title),
+           last_yes_price = VALUES(last_yes_price),
+           last_volume = VALUES(last_volume),
+           last_fired_at = VALUES(last_fired_at)`,
+        [
+          eventIds.map((id) => {
+            const row = eventMap.get(id)!;
+            return [id, row.title, row.yes, row.vol, row.firedAt ?? null];
+          }),
+        ],
+      );
+    }
+
+    const alerts = ticks.flatMap((tick) => tick.alerts);
+    if (alerts.length > 0) {
+      await pool.query(
+        `INSERT INTO alerts
+          (id, subscription_id, event_id, event_title, reason, snapshot_json, telegram_ok, email_ok, payment_tx)
+         VALUES ?`,
+        [
+          alerts.map((alert) => [
+            alert.id,
+            alert.subscriptionId,
+            alert.eventId,
+            alert.eventTitle,
+            alert.reason,
+            JSON.stringify(alert.snapshot),
+            alert.telegramOk ? 1 : 0,
+            alert.emailOk ? 1 : 0,
+            alert.paymentTx ?? null,
+          ]),
+        ],
+      );
+    }
+
+    const memberIds = boundedIds(ticks.flatMap((tick) => tick.memberIds));
+    if (memberIds.length > 0) {
+      const yesCase: string[] = [];
+      const volCase: string[] = [];
+      const firedCase: string[] = [];
+      const params: unknown[] = [];
+      const byId = new Map<string, TickPatch>();
+      for (const tick of ticks) {
+        for (const id of tick.memberIds) byId.set(id, tick);
+      }
+      for (const id of memberIds) {
+        const tick = byId.get(id)!;
+        yesCase.push("WHEN ? THEN ?");
+        params.push(id, tick.lastYesPrice);
+      }
+      for (const id of memberIds) {
+        const tick = byId.get(id)!;
+        volCase.push("WHEN ? THEN ?");
+        params.push(id, tick.lastVolume);
+      }
+      for (const id of memberIds) {
+        const tick = byId.get(id)!;
+        firedCase.push("WHEN ? THEN ?");
+        params.push(id, tick.lastFiredAt);
+      }
+      params.push(memberIds);
+      await pool.query(
+        `UPDATE subscriptions
+         SET last_yes_price = CASE id ${yesCase.join(" ")} END,
+             last_volume = CASE id ${volCase.join(" ")} END,
+             last_fired_at = CASE id ${firedCase.join(" ")} END
+         WHERE id IN (?)`,
+        params,
+      );
+    }
   },
 };
+
+let migratedJson = false;
+
+async function migrateJsonOnce() {
+  if (migratedJson) return;
+  migratedJson = true;
+  const [countRows] = await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS n FROM subscriptions LIMIT 1`,
+  );
+  if (Number(countRows[0]?.n ?? 0) > 0) return;
+  if (!existsSync(eventsDir)) return;
+
+  type EventDoc = {
+    eventId: string;
+    eventTitle: string;
+    lastYesPrice?: number;
+    lastVolume?: number;
+    lastFiredAt?: string;
+    updatedAt: string;
+    subscriptions: Subscription[];
+    alerts: AlertRecord[];
+    scans: ScanReport[];
+  };
+
+  const docs: EventDoc[] = readdirSync(eventsDir)
+    .filter((name) => name.endsWith(".json"))
+    .slice(0, IN_LIMIT)
+    .map((name) => {
+      try {
+        return JSON.parse(readFileSync(join(eventsDir, name), "utf8")) as EventDoc;
+      } catch {
+        return null;
+      }
+    })
+    .filter((doc): doc is EventDoc => Boolean(doc?.eventId));
+
+  if (docs.length === 0) return;
+
+  const eventValues = docs.map((doc) => [
+    doc.eventId,
+    doc.eventTitle || doc.eventId,
+    doc.lastYesPrice ?? null,
+    doc.lastVolume ?? null,
+    doc.lastFiredAt ?? null,
+  ]);
+  await pool.query(
+    `INSERT IGNORE INTO events
+      (event_id, event_title, last_yes_price, last_volume, last_fired_at)
+     VALUES ?`,
+    [eventValues],
+  );
+
+  const subs = docs.flatMap((doc) => doc.subscriptions ?? []).slice(0, 500);
+  if (subs.length > 0) {
+    await pool.query(
+      `INSERT IGNORE INTO subscriptions
+        (id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+         last_yes_price, last_volume, last_fired_at)
+       VALUES ?`,
+      [
+        subs.map((sub) => [
+          sub.id,
+          sub.eventId,
+          sub.wallet.toLowerCase(),
+          sub.eventTitle,
+          sub.chatId ?? "",
+          sub.email ?? "",
+          sub.paid ? 1 : 0,
+          sub.paidUsdc ?? WATCH_COST_USDC,
+          sub.paymentTx ?? null,
+          sub.active ? 1 : 0,
+          sub.lastYesPrice ?? null,
+          sub.lastVolume ?? null,
+          sub.lastFiredAt ?? null,
+        ]),
+      ],
+    );
+  }
+
+  const alerts = docs.flatMap((doc) => doc.alerts ?? []).slice(0, 500);
+  if (alerts.length > 0) {
+    await pool.query(
+      `INSERT IGNORE INTO alerts
+        (id, subscription_id, event_id, event_title, reason, snapshot_json, telegram_ok, email_ok, payment_tx)
+       VALUES ?`,
+      [
+        alerts.map((alert) => [
+          alert.id,
+          alert.subscriptionId,
+          alert.eventId,
+          alert.eventTitle,
+          alert.reason,
+          JSON.stringify(alert.snapshot),
+          alert.telegramOk ? 1 : 0,
+          alert.emailOk ? 1 : 0,
+          alert.paymentTx ?? null,
+        ]),
+      ],
+    );
+  }
+
+  const scans = docs.flatMap((doc) => doc.scans ?? []).slice(0, 500);
+  if (scans.length > 0) {
+    await pool.query(
+      `INSERT IGNORE INTO scans (id, event_id, payload_json) VALUES ?`,
+      [scans.map((scan) => [scan.id, scan.eventId, JSON.stringify(scan)])],
+    );
+  }
+  console.log(`[db] migrated ${docs.length} JSON event files into mysql`);
+}
