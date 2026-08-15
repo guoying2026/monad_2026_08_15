@@ -52,3 +52,11 @@ export function telegramCreds() {
     defaultChat: env("TELEGRAM_DEFAULT_CHAT_ID"),
   };
 }
+
+export function emailCreds() {
+  reloadEnv();
+  return {
+    key: env("RESEND_API_KEY"),
+    from: env("EMAIL_FROM", "Pulse <onboarding@resend.dev>"),
+  };
+}
