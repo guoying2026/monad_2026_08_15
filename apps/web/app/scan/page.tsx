@@ -18,8 +18,6 @@ export default function ScanPage() {
   const [searched, setSearched] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
   const [eventId, setEventId] = useState("");
-  const [wantEmail, setWantEmail] = useState(true);
-  const [wantTelegram, setWantTelegram] = useState(false);
   const [email, setEmail] = useState("");
   const [chatId, setChatId] = useState("");
   const [busy, setBusy] = useState<"sub" | null>(null);
@@ -106,7 +104,11 @@ export default function ScanPage() {
     setBusy("sub");
     try {
       if (!address) throw new Error(t("errConnect"));
-      if (wantEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      const mail = email.trim();
+      const tg = chatId.trim();
+      if (mail && tg) throw new Error(t("errChannelBoth"));
+      if (!mail && !tg) throw new Error(t("errChannelNone"));
+      if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
         throw new Error(t("errEmail"));
       }
       const res = await postJson(
@@ -114,8 +116,8 @@ export default function ScanPage() {
         {
           eventId,
           wallet: address,
-          email: wantEmail ? email.trim() : "",
-          chatId: wantTelegram ? chatId.trim() : "",
+          email: mail,
+          chatId: tg,
         },
         true,
       );
@@ -270,53 +272,26 @@ export default function ScanPage() {
             </div>
           )}
 
-          <p className="mt-5 text-xs font-medium text-muted">{t("notifyVia")}</p>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={() => setWantEmail((v) => !v)}
-              className={`rounded-full px-3 py-1.5 text-xs font-medium ${
-                wantEmail ? "bg-accent text-accent-fg" : "bg-chip text-muted"
-              }`}
-            >
-              {t("channelEmail")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setWantTelegram((v) => !v)}
-              className={`rounded-full px-3 py-1.5 text-xs font-medium ${
-                wantTelegram ? "bg-accent text-accent-fg" : "bg-chip text-muted"
-              }`}
-            >
-              {t("channelTelegram")}
-            </button>
-          </div>
-          {wantEmail && (
-            <label className="mt-3 block text-xs font-medium text-muted">
-              {t("emailLabel")}
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder={t("emailPlaceholder")}
-                className="field mt-2"
-              />
-            </label>
-          )}
-          {wantTelegram && (
-            <label className="mt-3 block text-xs font-medium text-muted">
-              {t("telegram")}
-              <input
-                value={chatId}
-                onChange={(e) => setChatId(e.target.value)}
-                placeholder={t("telegramHint")}
-                className="field mt-2"
-              />
-            </label>
-          )}
-          {!wantEmail && !wantTelegram && (
-            <p className="mt-3 text-xs leading-5 text-muted">{t("notifyNone")}</p>
-          )}
+          <p className="mt-5 text-xs leading-5 text-muted">{t("notifyTip")}</p>
+          <label className="mt-3 block text-xs font-medium text-muted">
+            {t("emailLabel")}
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder={t("emailPlaceholder")}
+              className="field mt-2"
+            />
+          </label>
+          <label className="mt-3 block text-xs font-medium text-muted">
+            {t("telegram")}
+            <input
+              value={chatId}
+              onChange={(e) => setChatId(e.target.value)}
+              placeholder={t("telegramHint")}
+              className="field mt-2"
+            />
+          </label>
 
           <button
             type="button"
