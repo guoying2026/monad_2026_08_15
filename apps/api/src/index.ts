@@ -4,13 +4,13 @@ import express from "express";
 import { buildAgentCard } from "@pulse/agent-card";
 import { reputationAbi } from "@pulse/shared";
 import { config, watchIntervalMs } from "./config.js";
-import { formatUsdc, WATCH_COST_USDC, quoteJoin, type AlertRecord } from "@pulse/shared";
-import { analyzeEvent, explainSwing } from "./llm.js";
-import { gatherEvidence } from "./evidence.js";
-import { detectSwing, getEvent, listEvents, searchEvents } from "./markets.js";
+import { formatUsdc, WATCH_COST_USDC, quoteJoin } from "@pulse/shared";
+import { persistOutcomes, scanEvent } from "./agent.js";
+import { pulseLog } from "./log.js";
+import { analyzeEvent } from "./llm.js";
+import { getEvent, listEvents, searchEvents } from "./markets.js";
 import { store } from "./store.js";
-import { sendEmail, validEmail } from "./email.js";
-import { formatAlertMessage, sendTelegram } from "./telegram.js";
+import { validEmail } from "./email.js";
 import { createX402Middleware, paymentTxFromRequest } from "./x402.js";
 
 const app = express();
@@ -167,6 +167,21 @@ app.post("/subscribe", async (req, res) => {
     subscription: joined.subscription,
     quote: "quote" in joined ? joined.quote : await store.quoteFor(event.id),
   });
+
+  void (async () => {
+    pulseLog(event.title, "订阅成功，立刻开始首次扫描");
+    const outcome = await scanEvent({
+      event,
+      members: [joined.subscription],
+      prevYes: event.yesPrice,
+      prevVolume: event.volume,
+      initial: true,
+    });
+    await persistOutcomes([outcome]);
+    pulseLog(event.title, outcome.tick ? "首次扫描完成，已发通知" : "首次扫描完成");
+  })().catch((err) => {
+    pulseLog(event.title, `首次扫描失败：${err instanceof Error ? err.message : err}`);
+  });
 });
 
 app.get("/subscriptions", async (req, res) => {
@@ -199,100 +214,73 @@ app.get("/scans/:id", async (req, res) => {
 app.post("/internal/tick", async (req, res) => {
   const force = readQuery(req, "force") === "1";
   const interval = watchIntervalMs();
-  const fired: string[] = [];
   const eventIds = await store.listWatchedEventIds();
   const snap = await store.loadWatchSnapshot(eventIds);
-  const poolUpdates: { eventId: string; eventTitle: string; lastYesPrice: number; lastVolume: number; lastFiredAt?: string; updatedAt: string }[] = [];
-  const ticks: { eventId: string; eventTitle: string; lastYesPrice: number; lastVolume: number; lastFiredAt: string; alerts: AlertRecord[]; memberIds: string[] }[] = [];
-  const checked: { eventId: string; checkedAt: string }[] = [];
+  pulseLog("worker", `本轮盯盘 ${eventIds.length} 个事件，间隔 ${Math.round(interval / 60000)} 分钟${force ? "，强制" : ""}`);
 
+  const outcomes = [];
   for (const eventId of eventIds) {
     const pool = snap.pools.get(eventId);
-    if (!force && pool?.lastCheckedAt && Date.now() - Date.parse(pool.lastCheckedAt) < interval) {
+    const neverNotified = !pool?.lastFiredAt;
+    if (!force && !neverNotified && pool?.lastCheckedAt && Date.now() - Date.parse(pool.lastCheckedAt) < interval) {
+      const ago = Math.round((Date.now() - Date.parse(pool.lastCheckedAt)) / 1000);
+      pulseLog(pool.eventTitle, `间隔未到，跳过（距上次 ${ago}s / 需 ${Math.round(interval / 1000)}s）`);
       continue;
     }
 
     const event = await getEvent(eventId);
-    if (!event) continue;
-
-    const members = snap.members.get(eventId) ?? [];
-    if (members.length === 0) continue;
-
-    const checkedAt = new Date().toISOString();
-    checked.push({ eventId, checkedAt });
-
-    const prevYes = pool?.lastYesPrice ?? members[0]?.lastYesPrice;
-    const prevVolume = pool?.lastVolume ?? members[0]?.lastVolume;
-    if (prevYes == null || prevVolume == null) {
-      poolUpdates.push({
-        eventId,
-        eventTitle: event.title,
-        lastYesPrice: event.yesPrice,
-        lastVolume: event.volume,
-        updatedAt: checkedAt,
-      });
+    if (!event) {
+      pulseLog(eventId, "拉不到盘口，跳过");
       continue;
     }
 
-    const swing = detectSwing(event, prevYes, prevVolume);
-    if (!swing) continue;
-    if (!force && pool?.lastFiredAt && Date.now() - Date.parse(pool.lastFiredAt) < interval) continue;
-
-    const evidence = await gatherEvidence(event);
-    const reason = await explainSwing(event, swing, evidence);
-    const now = new Date().toISOString();
-    const body = formatAlertMessage({
-      title: event.title,
-      reason,
-      yesPrice: event.yesPrice,
-      volume: event.volume,
-      url: event.url,
-    });
-
-    const alerts: AlertRecord[] = [];
-    for (const sub of members) {
-      const telegramOk = sub.chatId ? await sendTelegram(sub.chatId, body) : false;
-      const emailOk = sub.email ? await sendEmail(sub.email, `Pulse · ${event.title}`, body.replace(/<[^>]+>/g, "")) : false;
-      alerts.push({
-        id: randomUUID(),
-        subscriptionId: sub.id,
-        eventId: event.id,
-        eventTitle: event.title,
-        reason,
-        snapshot: {
-          yesPrice: event.yesPrice,
-          volume: event.volume,
-          prevYesPrice: swing.prevYes,
-          deltaYes: swing.deltaYes,
-          sources: evidence.slice(0, 6).map((item) => ({
-            kind: item.kind,
-            title: item.title,
-            source: item.source,
-            url: item.url,
-          })),
-        },
-        telegramOk,
-        emailOk,
-        paymentTx: sub.paymentTx,
-        createdAt: now,
-      });
-      fired.push(sub.id);
+    const members = snap.members.get(eventId) ?? [];
+    if (members.length === 0) {
+      pulseLog(event.title, "没有订阅者，跳过");
+      continue;
     }
 
-    ticks.push({
-      eventId: event.id,
-      eventTitle: event.title,
-      lastYesPrice: event.yesPrice,
-      lastVolume: event.volume,
-      lastFiredAt: now,
-      alerts,
-      memberIds: members.map((s) => s.id),
-    });
+    outcomes.push(
+      await scanEvent({
+        event,
+        members,
+        prevYes: pool?.lastYesPrice ?? members[0]?.lastYesPrice,
+        prevVolume: pool?.lastVolume ?? members[0]?.lastVolume,
+        initial: neverNotified,
+      }),
+    );
   }
 
-  await store.applyWatchResults(poolUpdates, ticks, checked);
+  await persistOutcomes(outcomes);
+  const fired = outcomes.flatMap((row) => row.tick?.memberIds ?? []);
+  pulseLog("worker", `本轮结束：扫描 ${outcomes.length} 个，通知 ${fired.length} 人`);
   res.json({ fired: fired.length, ids: fired, events: eventIds.length, intervalMs: interval });
 });
+
+async function scanNeverNotified() {
+  const eventIds = await store.listWatchedEventIds();
+  const snap = await store.loadWatchSnapshot(eventIds);
+  const pending = eventIds.filter((id) => !snap.pools.get(id)?.lastFiredAt);
+  if (pending.length === 0) return;
+  pulseLog("boot", `有 ${pending.length} 个已订阅但还没扫过的盘，立刻开扫`);
+  const outcomes = [];
+  for (const eventId of pending) {
+    const event = await getEvent(eventId);
+    const members = snap.members.get(eventId) ?? [];
+    if (!event || members.length === 0) continue;
+    const pool = snap.pools.get(eventId);
+    outcomes.push(
+      await scanEvent({
+        event,
+        members,
+        prevYes: pool?.lastYesPrice ?? members[0]?.lastYesPrice,
+        prevVolume: pool?.lastVolume ?? members[0]?.lastVolume,
+        initial: true,
+      }),
+    );
+  }
+  await persistOutcomes(outcomes);
+}
 
 void store.ready().then(() => {
   const server = app.listen(config.port, () => {
@@ -300,6 +288,9 @@ void store.ready().then(() => {
     console.log(`network    ${config.network.displayName} (${config.network.caip2})`);
     console.log(`x402       ${config.skipX402 ? "SKIPPED" : config.x402Price + " → " + config.payTo}`);
     console.log(`card       http://localhost:${config.port}/.well-known/agent-card.json`);
+    void scanNeverNotified().catch((err) => {
+      pulseLog("boot", `补扫失败：${err instanceof Error ? err.message : err}`);
+    });
   });
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {

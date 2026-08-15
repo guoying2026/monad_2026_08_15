@@ -27,7 +27,8 @@ async function tick() {
       console.warn(`[worker] ${stamp} tick failed`, res.status, body);
       return;
     }
-    console.log(`[worker] ${stamp} fired=${body.fired ?? 0} next=${intervalMs()}ms`);
+    const wait = intervalMs();
+    console.log(`[worker ${stamp.slice(11, 19)}] API 回了 fired=${body.fired ?? 0}，${Math.round(wait / 60000)} 分钟后再扫`);
   } catch (err) {
     console.warn("[worker] api unreachable", err instanceof Error ? err.message : err);
   }
@@ -40,5 +41,5 @@ async function loop() {
   }, intervalMs());
 }
 
-console.log(`Pulse worker → ${api}/internal/tick every ${intervalMs()}ms (WATCH_INTERVAL_MINUTES)`);
+console.log(`[worker] 盯盘 Worker 已启动 → ${api}/internal/tick ，间隔 ${Math.round(intervalMs() / 60000)} 分钟`);
 void loop();

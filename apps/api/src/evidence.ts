@@ -1,4 +1,5 @@
 import type { MarketEvent } from "@pulse/shared";
+import { pulseLog } from "./log.js";
 
 export type EvidenceKind = "news" | "social" | "flow";
 
@@ -144,26 +145,41 @@ async function polymarketFlow(event: MarketEvent): Promise<EvidenceItem[]> {
   return [];
 }
 
+async function settle(label: string, title: string, task: Promise<EvidenceItem[]>) {
+  try {
+    const items = await task;
+    pulseLog(title, `${label} 拿到 ${items.length} 条`);
+    return items;
+  } catch (err) {
+    pulseLog(title, `${label} 失败：${err instanceof Error ? err.message : err}`);
+    return [] as EvidenceItem[];
+  }
+}
+
 export async function gatherEvidence(event: MarketEvent): Promise<EvidenceItem[]> {
   const q = queryFor(event);
   const socialQ = `${q} (Twitter OR tweet OR site:x.com)`;
-  const settled = await Promise.allSettled([
-    googleNews(q, "news"),
-    googleNews(socialQ, "social"),
-    reddit(q),
-    nitter(q),
-    polymarketFlow(event),
+  pulseLog(event.title, `开始取证，关键词「${q}」`);
+  const settled = await Promise.all([
+    settle("新闻", event.title, googleNews(q, "news")),
+    settle("社交/新闻", event.title, googleNews(socialQ, "social")),
+    settle("Reddit", event.title, reddit(q)),
+    settle("Twitter", event.title, nitter(q)),
+    settle("盘口资金", event.title, polymarketFlow(event)),
   ]);
   const seen = new Set<string>();
   const out: EvidenceItem[] = [];
-  for (const row of settled) {
-    if (row.status !== "fulfilled") continue;
-    for (const item of row.value) {
+  for (const items of settled) {
+    for (const item of items) {
       const key = item.title.toLowerCase().slice(0, 80);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(item);
     }
   }
+  const news = out.filter((i) => i.kind === "news").length;
+  const social = out.filter((i) => i.kind === "social").length;
+  const flow = out.filter((i) => i.kind === "flow").length;
+  pulseLog(event.title, `取证结束：新闻 ${news} · 社交 ${social} · 资金 ${flow}`);
   return out.slice(0, 12);
 }

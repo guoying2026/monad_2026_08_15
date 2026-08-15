@@ -1,6 +1,7 @@
 import type { MarketEvent, ScanReport } from "@pulse/shared";
 import { config } from "./config.js";
 import type { EvidenceItem } from "./evidence.js";
+import { pulseLog } from "./log.js";
 import type { PriceSwing } from "./markets.js";
 
 function pct(n: number) {
@@ -177,12 +178,25 @@ async function chatJson(system: string, user: string) {
   };
 }
 
-export async function explainSwing(event: MarketEvent, swing: PriceSwing, evidence: EvidenceItem[]) {
+export async function explainSwing(
+  event: MarketEvent,
+  swing: PriceSwing,
+  evidence: EvidenceItem[],
+  mode: "initial" | "swing" = "swing",
+) {
   const fallback = explainFromEvidence(event, swing, evidence);
-  if (!config.openaiKey) return fallback;
+  if (!config.openaiKey) {
+    pulseLog(event.title, "没有 LLM Key，用规则拼原因");
+    return fallback;
+  }
+  const system =
+    mode === "initial"
+      ? "你是 Pulse，预测市场盯盘分析员。这是用户刚盯上的盘。用中文说明当前 YES 概率处在什么位置、新闻/社交/资金在说什么。必须回答现在为什么是这个价。只根据证据，禁止编造头条。返回 JSON {why: string}，2～4 句。"
+      : "你是 Pulse，预测市场盯盘分析员。必须用中文回答这次 YES 概率为什么涨或为什么跌。只根据提供的新闻、社交和成交证据，禁止编造未出现的头条。返回 JSON {why: string}，2～4 句，先说涨跌，再给原因，并点名依据。";
+  pulseLog(event.title, `调用 ${config.openaiModel} 写原因（${mode === "initial" ? "首次开盘" : "波动"}）`);
   try {
     const parsed = await chatJson(
-      "你是 Pulse，预测市场盯盘分析员。必须用中文回答这次 YES 概率为什么涨或为什么跌。只根据提供的新闻、社交和成交证据，禁止编造未出现的头条。返回 JSON {why: string}，2～4 句，先说涨跌，再给原因，并点名依据。",
+      system,
       JSON.stringify({
         title: event.title,
         question: event.question,
@@ -194,10 +208,14 @@ export async function explainSwing(event: MarketEvent, swing: PriceSwing, eviden
       }),
     );
     const why = parsed.why?.trim();
-    if (!why) return fallback;
+    if (!why) {
+      pulseLog(event.title, "模型没写出原因，改用规则");
+      return fallback;
+    }
+    pulseLog(event.title, `原因已生成：${why.slice(0, 80)}${why.length > 80 ? "…" : ""}`);
     return why.includes(pct(event.yesPrice)) || why.includes("YES") ? why : `${moveLine(event, swing)}${why}`;
   } catch (err) {
-    console.warn("[llm] explain fallback:", err instanceof Error ? err.message : err);
+    pulseLog(event.title, `模型失败，改用规则：${err instanceof Error ? err.message : err}`);
     return fallback;
   }
 }

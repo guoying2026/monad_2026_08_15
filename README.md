@@ -90,7 +90,7 @@ curl -s -X POST http://localhost:4000/scan \
 
 订阅和通知落 MySQL（默认 `mysql://root@127.0.0.1:3306/pulse`）。刷新、重启都还在。首次启动会把旧的 `apps/.data/events/*.json` 迁进去。
 
-Worker 按 `.env` 的 `WATCH_INTERVAL_MINUTES`（默认 5）检测每个事件。命中波动后会查新闻、社交和 Polymarket 成交，再用 DeepSeek 写明为什么涨或跌。没配 Telegram 时只打日志，前端 `/alerts` 仍能看到原因和依据。结果页「检查波动」会立刻跑一轮。
+订阅成功后立刻扫该事件并通知。之后 Worker 按 `WATCH_INTERVAL_MINUTES`（默认 5）再检。命中波动会查新闻、社交和成交，用 DeepSeek 写明为什么涨或跌。API 控制台会逐步打印取证和通知。结果页「检查波动」会立刻跑一轮。
 
 ## 阶段 3：x402
 
