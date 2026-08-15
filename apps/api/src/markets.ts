@@ -115,6 +115,7 @@ function fromGamma(event: GammaEvent): MarketEvent | null {
     url: `https://polymarket.com/event/${slug}`,
     source: "polymarket",
     outcomes: outcomes.length > 0 ? outcomes : undefined,
+    marketIds: outcomes.map((row) => row.id),
   };
 }
 
@@ -266,6 +267,7 @@ export async function getEvent(id: string): Promise<MarketEvent | undefined> {
         endDate: market.events?.[0]?.endDate ?? null,
         url: `https://polymarket.com/event/${parent?.slug ?? market.slug ?? id}`,
         source: "polymarket",
+        marketIds: market.id ? [String(market.id)] : undefined,
       };
     }
   } catch (err) {

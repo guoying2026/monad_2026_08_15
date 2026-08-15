@@ -92,6 +92,24 @@ function AlertsInner() {
             </div>
             <h3 className="mt-2 text-sm font-medium">{a.eventTitle}</h3>
             <p className="mt-1 text-sm text-muted">{a.reason}</p>
+            {a.snapshot.sources && a.snapshot.sources.length > 0 && (
+              <ul className="mt-2 space-y-1 text-xs text-muted">
+                {a.snapshot.sources.map((src, i) => (
+                  <li key={`${a.id}-${i}`}>
+                    <span className="mr-1 rounded-full bg-chip px-1.5 py-0.5">
+                      {src.kind === "news" ? t("evidenceNews") : src.kind === "social" ? t("evidenceSocial") : t("evidenceFlow")}
+                    </span>
+                    {src.url ? (
+                      <a href={src.url} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline">
+                        {src.title}
+                      </a>
+                    ) : (
+                      src.title
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
             <p className="mt-2 text-xs font-medium text-accent">
               YES{" "}
               {a.snapshot.prevYesPrice != null

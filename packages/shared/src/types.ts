@@ -19,6 +19,7 @@ export type MarketEvent = {
   url: string;
   source: "polymarket" | "demo";
   outcomes?: MarketOutcome[];
+  marketIds?: string[];
 };
 
 export type ScanReport = {
@@ -67,7 +68,13 @@ export type AlertRecord = {
   eventId: string;
   eventTitle: string;
   reason: string;
-  snapshot: { yesPrice: number; volume: number; prevYesPrice?: number; deltaYes?: number };
+  snapshot: {
+    yesPrice: number;
+    volume: number;
+    prevYesPrice?: number;
+    deltaYes?: number;
+    sources?: { kind: "news" | "social" | "flow"; title: string; source: string; url?: string }[];
+  };
   telegramOk: boolean;
   emailOk: boolean;
   paymentTx?: string;

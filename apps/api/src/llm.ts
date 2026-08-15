@@ -1,5 +1,7 @@
 import type { MarketEvent, ScanReport } from "@pulse/shared";
 import { config } from "./config.js";
+import type { EvidenceItem } from "./evidence.js";
+import type { PriceSwing } from "./markets.js";
 
 function pct(n: number) {
   return `${(n * 100).toFixed(1)}%`;
@@ -120,15 +122,82 @@ export async function analyzeEvent(event: MarketEvent) {
   return ruleBased(event);
 }
 
-export function alertReason(
-  event: MarketEvent,
-  swing: { kind: "price" | "volume" | "both"; prevYes: number; deltaYes: number; volumeRatio: number },
-) {
-  const dir = swing.deltaYes >= 0 ? "up" : "down";
+function moveLine(event: MarketEvent, swing: PriceSwing) {
+  const dir = swing.deltaYes >= 0 ? "上涨" : "下跌";
   const pts = `${swing.deltaYes >= 0 ? "+" : ""}${(swing.deltaYes * 100).toFixed(1)}pt`;
-  const vol = swing.volumeRatio >= 0 ? `volume +${(swing.volumeRatio * 100).toFixed(0)}%` : `volume ${(swing.volumeRatio * 100).toFixed(0)}%`;
-  if (swing.kind === "volume") {
-    return `Pulse flagged a flow spike on “${event.title}”: ${vol} while YES moved ${pts} to ${pct(event.yesPrice)}. This is a liquidity print, not a direction call.`;
+  const vol = `${swing.volumeRatio >= 0 ? "+" : ""}${(swing.volumeRatio * 100).toFixed(0)}%`;
+  return `「${event.title}」YES ${pct(swing.prevYes)} → ${pct(event.yesPrice)}（${dir} ${pts}），成交量 ${vol}。`;
+}
+
+function cite(items: EvidenceItem[]) {
+  return items
+    .slice(0, 5)
+    .map((item) => `${item.kind === "news" ? "新闻" : item.kind === "social" ? "社交" : "资金"} · ${item.source}：${item.title}`)
+    .join("；");
+}
+
+export function explainFromEvidence(event: MarketEvent, swing: PriceSwing, evidence: EvidenceItem[]) {
+  const head = moveLine(event, swing);
+  const news = evidence.filter((e) => e.kind === "news");
+  const social = evidence.filter((e) => e.kind === "social");
+  const flow = evidence.filter((e) => e.kind === "flow");
+  const dir = swing.deltaYes >= 0 ? "涨" : "跌";
+  if (news[0] || social[0]) {
+    const lead = news[0] || social[0];
+    return `${head}之所以${dir}，是因为公开信息出现：${lead.title}。${cite(evidence)}`;
   }
-  return `Pulse caught a YES swing ${dir} ${pts} on “${event.title}” (${pct(swing.prevYes)} → ${pct(event.yesPrice)}). ${vol}. NO now ${pct(event.noPrice)}. Agent-detected move — check whether the tape has news behind it.`;
+  if (flow[0]) {
+    return `${head}公开新闻和社交没有对应头条，${dir}更像是盘口资金在动：${flow[0].title}。`;
+  }
+  return `${head}公开新闻、社交和近期成交都没有抓到对应线索，这次${dir}更像是薄书上的盘内波动，而不是新消息定价。`;
+}
+
+async function chatJson(system: string, user: string) {
+  const res = await fetch(`${config.openaiBaseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${config.openaiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: config.openaiModel,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (!res.ok) throw new Error(`llm ${res.status}`);
+  const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return JSON.parse(body.choices?.[0]?.message?.content ?? "{}") as {
+    why?: string;
+  };
+}
+
+export async function explainSwing(event: MarketEvent, swing: PriceSwing, evidence: EvidenceItem[]) {
+  const fallback = explainFromEvidence(event, swing, evidence);
+  if (!config.openaiKey) return fallback;
+  try {
+    const parsed = await chatJson(
+      "你是 Pulse，预测市场盯盘分析员。必须用中文回答这次 YES 概率为什么涨或为什么跌。只根据提供的新闻、社交和成交证据，禁止编造未出现的头条。返回 JSON {why: string}，2～4 句，先说涨跌，再给原因，并点名依据。",
+      JSON.stringify({
+        title: event.title,
+        question: event.question,
+        from: swing.prevYes,
+        to: event.yesPrice,
+        deltaYes: swing.deltaYes,
+        volumeRatio: swing.volumeRatio,
+        evidence,
+      }),
+    );
+    const why = parsed.why?.trim();
+    if (!why) return fallback;
+    return why.includes(pct(event.yesPrice)) || why.includes("YES") ? why : `${moveLine(event, swing)}${why}`;
+  } catch (err) {
+    console.warn("[llm] explain fallback:", err instanceof Error ? err.message : err);
+    return fallback;
+  }
 }

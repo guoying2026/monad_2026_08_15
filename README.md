@@ -90,7 +90,7 @@ curl -s -X POST http://localhost:4000/scan \
 
 订阅和通知落 MySQL（默认 `mysql://root@127.0.0.1:3306/pulse`）。刷新、重启都还在。首次启动会把旧的 `apps/.data/events/*.json` 迁进去。
 
-Worker 默认 20s 打一次 `/internal/tick`。没配 Telegram 时只打日志，前端 `/alerts` 仍能看到原因文案。Demo 市场的赔率会漂移，方便当场触发。
+Worker 默认 20s 打一次 `/internal/tick`。命中波动后会查新闻、社交和 Polymarket 成交，再用 DeepSeek 写明为什么涨或跌。没配 Telegram 时只打日志，前端 `/alerts` 仍能看到原因和依据。Demo 市场的赔率会漂移，方便当场触发。
 
 ## 阶段 3：x402
 

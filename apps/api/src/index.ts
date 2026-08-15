@@ -5,7 +5,8 @@ import { buildAgentCard } from "@pulse/agent-card";
 import { reputationAbi } from "@pulse/shared";
 import { config } from "./config.js";
 import { formatUsdc, WATCH_COST_USDC, quoteJoin, type AlertRecord } from "@pulse/shared";
-import { analyzeEvent, alertReason } from "./llm.js";
+import { analyzeEvent, explainSwing } from "./llm.js";
+import { gatherEvidence } from "./evidence.js";
 import { detectSwing, getEvent, listEvents, searchEvents } from "./markets.js";
 import { store } from "./store.js";
 import { sendEmail, validEmail } from "./email.js";
@@ -227,7 +228,8 @@ app.post("/internal/tick", async (_req, res) => {
     if (!swing) continue;
     if (pool?.lastFiredAt && Date.now() - Date.parse(pool.lastFiredAt) < 2 * 60_000) continue;
 
-    const reason = alertReason(event, swing);
+    const evidence = await gatherEvidence(event);
+    const reason = await explainSwing(event, swing, evidence);
     const now = new Date().toISOString();
     const body = formatAlertMessage({
       title: event.title,
@@ -252,6 +254,12 @@ app.post("/internal/tick", async (_req, res) => {
           volume: event.volume,
           prevYesPrice: swing.prevYes,
           deltaYes: swing.deltaYes,
+          sources: evidence.slice(0, 6).map((item) => ({
+            kind: item.kind,
+            title: item.title,
+            source: item.source,
+            url: item.url,
+          })),
         },
         telegramOk,
         emailOk,

@@ -34,7 +34,7 @@ export function formatAlertMessage(opts: {
 }) {
   const yes = `${(opts.yesPrice * 100).toFixed(1)}%`;
   return [
-    `<b>Pulse alert</b>`,
+    `<b>Pulse 盯盘</b>`,
     opts.title,
     "",
     opts.reason,

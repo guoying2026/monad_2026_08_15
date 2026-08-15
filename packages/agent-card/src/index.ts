@@ -35,6 +35,7 @@ export function buildAgentCard(opts: {
     name: AGENT_NAME,
     description:
       `Monad prediction-market watch agent. Watch any Polymarket event for $0.01 USDC via x402. ` +
+      `On a swing it checks news, social, and book flow, then explains why YES moved. ` +
       `Personal scan reports are free. One compute per event, then fan-out. ` +
       `Receiver: ${opts.payTo} on ${opts.network.displayName}.`,
     image: `${web}/pulse.svg`,
