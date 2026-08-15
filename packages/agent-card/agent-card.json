@@ -1,0 +1,15 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Pulse",
+  "description": "Monad prediction-market watch agent. Scan or watch any event for $0.01 USDC. One compute per event, then fan-out.",
+  "image": "http://localhost:3000/pulse.svg",
+  "services": [
+    { "name": "web", "endpoint": "http://localhost:3000" },
+    { "name": "HTTP", "endpoint": "http://localhost:4000/scan", "version": "1.0.0" },
+    { "name": "A2A", "endpoint": "http://localhost:4000/.well-known/agent-card.json", "version": "0.3.0" }
+  ],
+  "x402Support": true,
+  "active": true,
+  "registrations": [],
+  "supportedTrust": ["reputation"]
+}

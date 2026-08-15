@@ -1,0 +1,19 @@
+{
+  "name": "monad-pulse",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ERC-8004 + x402 prediction-market agent on Monad",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @pulse/api --filter @pulse/web --filter @pulse/worker dev",
+    "dev:api": "pnpm --filter @pulse/api dev",
+    "dev:web": "pnpm --filter @pulse/web dev",
+    "dev:worker": "pnpm --filter @pulse/worker dev",
+    "build": "pnpm -r build",
+    "register": "pnpm --filter @pulse/api register",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

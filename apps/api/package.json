@@ -1,0 +1,30 @@
+{
+  "name": "@pulse/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "register": "tsx src/register.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pulse/agent-card": "workspace:*",
+    "@pulse/shared": "workspace:*",
+    "@x402/core": "^2.2.0",
+    "@x402/evm": "^2.22.0",
+    "@x402/express": "^2.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "viem": "^2.31.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

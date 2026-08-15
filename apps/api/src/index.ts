@@ -1,0 +1,266 @@
+import { randomUUID } from "node:crypto";
+import cors from "cors";
+import express from "express";
+import { buildAgentCard } from "@pulse/agent-card";
+import { reputationAbi } from "@pulse/shared";
+import { config } from "./config.js";
+import { formatUsdc, WATCH_COST_USDC, type AlertRecord } from "@pulse/shared";
+import { analyzeEvent, alertReason } from "./llm.js";
+import { detectSwing, getEvent, listEvents, searchEvents } from "./markets.js";
+import { store } from "./store.js";
+import { sendEmail, validEmail } from "./email.js";
+import { formatAlertMessage, sendTelegram } from "./telegram.js";
+import { createX402Middleware, paymentTxFromRequest } from "./x402.js";
+
+const app = express();
+app.use(cors({ exposedHeaders: ["payment-required", "payment-response", "x-payment-response"] }));
+app.use(express.json({ limit: "1mb" }));
+
+app.use(createX402Middleware());
+
+function card() {
+  return buildAgentCard({
+    apiUrl: config.publicApiUrl,
+    webUrl: config.publicWebUrl,
+    payTo: config.payTo || "0x0000000000000000000000000000000000000000",
+    network: config.network,
+    agentId: config.agentId ? Number(config.agentId) : undefined,
+  });
+}
+
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    agent: "Pulse",
+    network: config.network.name,
+    chainId: config.network.chainId,
+    skipX402: config.skipX402,
+    agentId: config.agentId || null,
+  });
+});
+
+app.get(["/agent-card.json", "/.well-known/agent-card.json"], (_req, res) => {
+  res.json(card());
+});
+
+app.get("/config", (_req, res) => {
+  res.json({
+    network: config.network,
+    payTo: config.payTo || null,
+    agentId: config.agentId || null,
+    skipX402: config.skipX402,
+    price: config.x402Price,
+    watchCost: formatUsdc(WATCH_COST_USDC),
+    identityRegistry: config.identityRegistry,
+    reputationRegistry: config.reputationRegistry,
+    scan8004: config.network.scan8004(config.agentId || undefined),
+    feedback: {
+      address: config.reputationRegistry,
+      abi: reputationAbi,
+    },
+  });
+});
+
+app.get("/events", async (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  const events = q ? await searchEvents(q) : await listEvents();
+  res.json({
+    events: events.map((event) => ({
+      ...event,
+      pool: store.quoteFor(event.id),
+    })),
+  });
+});
+
+app.get("/pools/:eventId", (req, res) => {
+  res.json({
+    pool: store.getPool(req.params.eventId) ?? null,
+    quote: store.quoteFor(req.params.eventId),
+  });
+});
+
+app.get("/events/:id", async (req, res) => {
+  const event = await getEvent(req.params.id);
+  if (!event) {
+    res.status(404).json({ error: "event not found" });
+    return;
+  }
+  res.json({ event, pool: store.quoteFor(event.id) });
+});
+
+app.post("/scan", async (req, res) => {
+  const eventId = String(req.body?.eventId ?? "");
+  if (!eventId) {
+    res.status(400).json({ error: "eventId required" });
+    return;
+  }
+  const event = await getEvent(eventId);
+  if (!event) {
+    res.status(404).json({ error: "event not found" });
+    return;
+  }
+
+  const analysis = await analyzeEvent(event);
+  const report = store.addScan({
+    id: randomUUID(),
+    eventId: event.id,
+    event,
+    ...analysis,
+    paid: !config.skipX402,
+    paymentTx: paymentTxFromRequest(req),
+    createdAt: new Date().toISOString(),
+  });
+  res.json({ report });
+});
+
+app.post("/subscribe", async (req, res) => {
+  const eventId = String(req.body?.eventId ?? "");
+  const wallet = String(req.body?.wallet ?? "");
+  const chatId = String(req.body?.chatId ?? config.telegramDefaultChat ?? "").trim();
+  const email = String(req.body?.email ?? "").trim();
+  if (email && !validEmail(email)) {
+    res.status(400).json({ error: "invalid email" });
+    return;
+  }
+
+  if (!eventId || !wallet) {
+    res.status(400).json({ error: "wallet and eventId required" });
+    return;
+  }
+
+  const event = await getEvent(eventId);
+  if (!event) {
+    res.status(404).json({ error: "event not found" });
+    return;
+  }
+
+  const joined = store.joinWatch({
+    id: randomUUID(),
+    wallet,
+    eventId: event.id,
+    eventTitle: event.title,
+    chatId,
+    email,
+    paid: !config.skipX402,
+    paymentTx: paymentTxFromRequest(req),
+    lastYesPrice: event.yesPrice,
+    lastVolume: event.volume,
+  });
+
+  if ("error" in joined && joined.error === "already-joined") {
+    res.status(409).json({ error: "already in this watch pool", subscription: joined.subscription });
+    return;
+  }
+
+  res.json({
+    subscription: joined.subscription,
+    quote: "quote" in joined ? joined.quote : store.quoteFor(event.id),
+  });
+});
+
+app.get("/subscriptions", (req, res) => {
+  const wallet = String(req.query.wallet ?? "");
+  const rows = store.listSubscriptions();
+  res.json({ subscriptions: wallet ? rows.filter((s) => s.wallet.toLowerCase() === wallet.toLowerCase()) : rows });
+});
+
+app.get("/alerts", (req, res) => {
+  const wallet = String(req.query.wallet ?? "");
+  const subs = new Set(
+    store
+      .listSubscriptions()
+      .filter((s) => !wallet || s.wallet.toLowerCase() === wallet.toLowerCase())
+      .map((s) => s.id),
+  );
+  const alerts = store.listAlerts().filter((a) => !wallet || subs.has(a.subscriptionId));
+  res.json({ alerts, scans: wallet ? store.listScans() : store.listScans() });
+});
+
+app.get("/scans", (_req, res) => {
+  res.json({ scans: store.listScans() });
+});
+
+app.get("/scans/:id", (req, res) => {
+  const report = store.getScan(req.params.id);
+  if (!report) {
+    res.status(404).json({ error: "scan not found" });
+    return;
+  }
+  res.json({ report });
+});
+
+app.post("/internal/tick", async (_req, res) => {
+  const fired: string[] = [];
+  const eventIds = store.listWatchedEventIds();
+
+  for (const eventId of eventIds) {
+    const event = await getEvent(eventId);
+    if (!event) continue;
+
+    const members = store.activeForEvent(eventId);
+    if (members.length === 0) continue;
+
+    const pool = store.getPool(eventId);
+    const prevYes = pool?.lastYesPrice ?? members[0]?.lastYesPrice;
+    const prevVolume = pool?.lastVolume ?? members[0]?.lastVolume;
+    if (prevYes == null || prevVolume == null) {
+      store.updatePool(eventId, { lastYesPrice: event.yesPrice, lastVolume: event.volume });
+      continue;
+    }
+
+    const swing = detectSwing(event, prevYes, prevVolume);
+    if (!swing) continue;
+    if (pool?.lastFiredAt && Date.now() - Date.parse(pool.lastFiredAt) < 2 * 60_000) continue;
+
+    const reason = alertReason(event, swing);
+    const now = new Date().toISOString();
+    const body = formatAlertMessage({
+      title: event.title,
+      reason,
+      yesPrice: event.yesPrice,
+      volume: event.volume,
+      url: event.url,
+    });
+
+    const alerts: AlertRecord[] = [];
+    for (const sub of members) {
+      const telegramOk = sub.chatId ? await sendTelegram(sub.chatId, body) : false;
+      const emailOk = sub.email ? await sendEmail(sub.email, `Pulse · ${event.title}`, body.replace(/<[^>]+>/g, "")) : false;
+      alerts.push({
+        id: randomUUID(),
+        subscriptionId: sub.id,
+        eventId: event.id,
+        eventTitle: event.title,
+        reason,
+        snapshot: {
+          yesPrice: event.yesPrice,
+          volume: event.volume,
+          prevYesPrice: swing.prevYes,
+          deltaYes: swing.deltaYes,
+        },
+        telegramOk,
+        emailOk,
+        paymentTx: sub.paymentTx,
+        createdAt: now,
+      });
+      fired.push(sub.id);
+    }
+
+    store.commitTick(eventId, {
+      eventTitle: event.title,
+      lastYesPrice: event.yesPrice,
+      lastVolume: event.volume,
+      lastFiredAt: now,
+      alerts,
+      memberIds: members.map((s) => s.id),
+    });
+  }
+  res.json({ fired: fired.length, ids: fired, events: eventIds.length });
+});
+
+app.listen(config.port, () => {
+  console.log(`Pulse API  http://localhost:${config.port}`);
+  console.log(`network    ${config.network.displayName} (${config.network.caip2})`);
+  console.log(`x402       ${config.skipX402 ? "SKIPPED" : config.x402Price + " → " + config.payTo}`);
+  console.log(`card       http://localhost:${config.port}/.well-known/agent-card.json`);
+});
