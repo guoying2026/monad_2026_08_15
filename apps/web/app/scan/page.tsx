@@ -18,7 +18,6 @@ export default function ScanPage() {
   const [searched, setSearched] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
   const [eventId, setEventId] = useState("");
-  const [email, setEmail] = useState("");
   const [chatId, setChatId] = useState("");
   const [busy, setBusy] = useState<"sub" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,18 +103,14 @@ export default function ScanPage() {
     setBusy("sub");
     try {
       if (!address) throw new Error(t("errConnect"));
-      const mail = email.trim();
       const tg = chatId.trim();
-      if (!mail && !tg) throw new Error(t("errChannelNone"));
-      if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
-        throw new Error(t("errEmail"));
-      }
+      if (!tg) throw new Error(t("errChannelNone"));
       const res = await postJson(
         "/subscribe",
         {
           eventId,
           wallet: address,
-          email: mail,
+          email: "",
           chatId: tg,
         },
         true,
@@ -277,17 +272,6 @@ export default function ScanPage() {
 
           <p className="mt-5 text-xs leading-5 text-muted">{t("notifyTip")}</p>
           <label className="mt-3 block text-xs font-medium text-muted">
-            {t("emailLabel")}
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder={t("emailPlaceholder")}
-              className="field mt-2"
-            />
-          </label>
-          <p className="mt-2 text-xs leading-5 text-muted">{t("emailHint")}</p>
-          <label className="mt-4 block text-xs font-medium text-muted">
             {t("telegram")}
             <input
               value={chatId}
