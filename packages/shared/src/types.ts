@@ -20,6 +20,7 @@ export type MarketEvent = {
   source: "polymarket" | "demo";
   outcomes?: MarketOutcome[];
   marketIds?: string[];
+  yesTokenId?: string;
 };
 
 export type ScanReport = {
@@ -60,6 +61,7 @@ export type WatchPool = {
   lastVolume?: number;
   lastFiredAt?: string;
   lastCheckedAt?: string;
+  lastStory?: string;
   updatedAt: string;
 };
 
@@ -74,6 +76,8 @@ export type AlertRecord = {
     volume: number;
     prevYesPrice?: number;
     deltaYes?: number;
+    window?: string;
+    trend?: string;
     sources?: { kind: "news" | "social" | "flow"; title: string; source: string; url?: string }[];
   };
   telegramOk: boolean;

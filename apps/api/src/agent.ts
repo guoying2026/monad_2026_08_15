@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { AlertRecord, MarketEvent, Subscription, WatchPool } from "@pulse/shared";
 import { gatherEvidence } from "./evidence.js";
+import { fetchPriceHistory } from "./history.js";
+import { buildStory, shouldNotify, storyLine, type PriceQuote } from "./horizon.js";
 import { explainSwing } from "./llm.js";
 import { pulseLog } from "./log.js";
 import { detectSwing, type PriceSwing } from "./markets.js";
-import { store, type TickPatch } from "./store.js";
+import { store, type QuoteRow, type TickPatch } from "./store.js";
 import { sendEmail } from "./email.js";
 import { formatAlertMessage, sendTelegram } from "./telegram.js";
 
@@ -13,6 +15,7 @@ export type ScanOutcome = {
   checkedAt: string;
   poolUpdate?: WatchPool;
   tick?: TickPatch;
+  quotes: QuoteRow[];
 };
 
 function asSwing(event: MarketEvent, prevYes: number, prevVolume: number): PriceSwing {
@@ -35,12 +38,36 @@ export async function scanEvent(opts: {
   prevYes?: number;
   prevVolume?: number;
   initial?: boolean;
+  force?: boolean;
+  lastStory?: string;
+  lastFiredYes?: number;
+  quotes?: PriceQuote[];
 }): Promise<ScanOutcome> {
-  const { event, members, initial } = opts;
+  const { event, members, initial, force } = opts;
   const checkedAt = new Date().toISOString();
+  const now = Date.now();
+  let quotes = [...(opts.quotes ?? [])];
+  const needHist = quotes.length < 10;
+  if (needHist) {
+    const hist = await fetchPriceHistory(event);
+    quotes = [...hist, ...quotes];
+  }
+  quotes.push({ at: now, yes: event.yesPrice, volume: event.volume });
+  const currentQuote: QuoteRow = { eventId: event.id, yes: event.yesPrice, volume: event.volume, at: new Date(now) };
+  const quoteRows: QuoteRow[] = needHist
+    ? [
+        currentQuote,
+        ...quotes
+          .filter((q) => q.at < now - 60_000)
+          .filter((_, i, all) => i % Math.max(1, Math.floor(all.length / 80)) === 0)
+          .slice(-80)
+          .map((q) => ({ eventId: event.id, yes: q.yes, volume: q.volume, at: new Date(q.at) })),
+      ]
+    : [currentQuote];
+
   pulseLog(
     event.title,
-    `开始扫描  YES ${(event.yesPrice * 100).toFixed(1)}%  量 ${event.volume.toFixed(0)}  订阅 ${members.length} 人${initial ? "  · 首次" : ""}`,
+    `开始扫描  YES ${(event.yesPrice * 100).toFixed(1)}%  量 ${event.volume.toFixed(0)}  订阅 ${members.length} 人  历史点 ${quotes.length}${initial ? "  · 首次" : ""}`,
   );
 
   if (opts.prevYes == null || opts.prevVolume == null) {
@@ -48,6 +75,7 @@ export async function scanEvent(opts: {
     return {
       eventId: event.id,
       checkedAt,
+      quotes: quoteRows,
       poolUpdate: {
         eventId: event.id,
         eventTitle: event.title,
@@ -58,23 +86,34 @@ export async function scanEvent(opts: {
     };
   }
 
-  const swing = detectSwing(event, opts.prevYes, opts.prevVolume);
-  if (swing) {
-    pulseLog(
-      event.title,
-      `检测到波动  ${(swing.prevYes * 100).toFixed(1)}% → ${(event.yesPrice * 100).toFixed(1)}%（${swing.deltaYes >= 0 ? "+" : ""}${(swing.deltaYes * 100).toFixed(1)}pt）量变 ${(swing.volumeRatio * 100).toFixed(0)}%`,
-    );
-  } else if (initial) {
-    pulseLog(event.title, "首次盯盘，盘口还没大波动，仍然出开盘说明并通知");
+  const story = buildStory({
+    now,
+    yes: event.yesPrice,
+    quotes,
+    lastFiredYes: opts.lastFiredYes ?? opts.prevYes,
+  });
+  if (story) {
+    pulseLog(event.title, `主窗口 ${storyLine(story)}${story.others.length ? `；对照 ${story.others.map((o) => `${o.label} ${(o.delta * 100).toFixed(1)}pt`).join(" / ")}` : ""}`);
   } else {
-    pulseLog(event.title, "未达波动阈值，本轮不通知");
-    return { eventId: event.id, checkedAt };
+    pulseLog(event.title, "各时间窗口都没有超过阈值的变动");
   }
 
-  const used = swing ?? asSwing(event, opts.prevYes, opts.prevVolume);
+  const notify = shouldNotify({
+    initial,
+    force,
+    story,
+    lastStory: opts.lastStory,
+    lastFiredYes: opts.lastFiredYes ?? opts.prevYes,
+    yes: event.yesPrice,
+  });
+  if (!notify) {
+    pulseLog(event.title, "变动还不够成一条新故事，本轮不通知");
+    return { eventId: event.id, checkedAt, quotes: [currentQuote] };
+  }
+
+  const swing = detectSwing(event, story?.from ?? opts.prevYes, opts.prevVolume) ?? asSwing(event, story?.from ?? opts.prevYes, opts.prevVolume);
   const evidence = await gatherEvidence(event);
-  const reason = await explainSwing(event, used, evidence, initial ? "initial" : "swing");
-  const now = checkedAt;
+  const reason = await explainSwing(event, swing, evidence, initial ? "initial" : "swing", story);
   const body = formatAlertMessage({
     title: event.title,
     reason,
@@ -98,8 +137,10 @@ export async function scanEvent(opts: {
       snapshot: {
         yesPrice: event.yesPrice,
         volume: event.volume,
-        prevYesPrice: used.prevYes,
-        deltaYes: used.deltaYes,
+        prevYesPrice: story?.from ?? swing.prevYes,
+        deltaYes: story?.delta ?? swing.deltaYes,
+        window: story?.label,
+        trend: story?.trendLabel,
         sources: evidence.slice(0, 6).map((item) => ({
           kind: item.kind,
           title: item.title,
@@ -110,7 +151,7 @@ export async function scanEvent(opts: {
       telegramOk,
       emailOk,
       paymentTx: sub.paymentTx,
-      createdAt: now,
+      createdAt: checkedAt,
     });
   }
 
@@ -118,12 +159,14 @@ export async function scanEvent(opts: {
   return {
     eventId: event.id,
     checkedAt,
+    quotes: [currentQuote],
     tick: {
       eventId: event.id,
       eventTitle: event.title,
       lastYesPrice: event.yesPrice,
       lastVolume: event.volume,
-      lastFiredAt: now,
+      lastFiredAt: checkedAt,
+      lastStory: story?.key,
       alerts,
       memberIds: members.map((s) => s.id),
     },
@@ -135,5 +178,6 @@ export async function persistOutcomes(outcomes: ScanOutcome[]) {
     outcomes.flatMap((row) => (row.poolUpdate ? [row.poolUpdate] : [])),
     outcomes.flatMap((row) => (row.tick ? [row.tick] : [])),
     outcomes.map((row) => ({ eventId: row.eventId, checkedAt: row.checkedAt })),
+    outcomes.flatMap((row) => row.quotes),
   );
 }

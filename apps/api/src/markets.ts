@@ -59,11 +59,21 @@ type GammaMarket = {
   volume?: number | string;
   liquidity?: number | string;
   slug?: string;
+  clobTokenIds?: string;
 };
 
 function num(v: unknown): number {
   const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : 0;
   return Number.isFinite(n) ? n : 0;
+}
+
+function tokenIds(raw?: string): string[] {
+  try {
+    const parsed = JSON.parse(raw ?? "[]") as unknown[];
+    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
 }
 
 function prices(raw?: string): [number, number] {
@@ -116,6 +126,7 @@ function fromGamma(event: GammaEvent): MarketEvent | null {
     source: "polymarket",
     outcomes: outcomes.length > 0 ? outcomes : undefined,
     marketIds: outcomes.map((row) => row.id),
+    yesTokenId: tokenIds((markets.find((m) => String(m.id) === lead?.id) ?? markets[0])?.clobTokenIds)[0],
   };
 }
 

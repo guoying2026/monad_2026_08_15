@@ -27,6 +27,7 @@ const SCHEMA = [
     last_volume DOUBLE NULL,
     last_fired_at VARCHAR(40) NULL,
     last_checked_at VARCHAR(40) NULL,
+    last_story VARCHAR(80) NULL,
     ${AUDIT},
     PRIMARY KEY (event_id),
     KEY idx_events_update_time (update_time)
@@ -77,6 +78,16 @@ const SCHEMA = [
     KEY idx_scan_event (event_id),
     KEY idx_scan_create_time (create_time)
   )`,
+  `CREATE TABLE IF NOT EXISTS event_quotes (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    event_id VARCHAR(128) NOT NULL,
+    yes_price DOUBLE NOT NULL,
+    volume DOUBLE NOT NULL DEFAULT 0,
+    ${AUDIT},
+    PRIMARY KEY (id),
+    KEY idx_quote_event_time (event_id, create_time),
+    KEY idx_quote_create_time (create_time)
+  )`,
 ];
 
 const TABLES = ["events", "subscriptions", "alerts", "scans"] as const;
@@ -104,6 +115,7 @@ async function init() {
   }
   await ensureAuditColumns();
   await ensureLastCheckedColumn();
+  await ensureLastStoryColumn();
   await dropLegacyTimeColumns();
   console.log(`[db] mysql ${url.hostname}:${url.port || 3306}/${dbName}`);
 }
@@ -145,6 +157,21 @@ async function ensureLastCheckedColumn() {
   await pool.query(
     `ALTER TABLE events
      ADD COLUMN last_checked_at VARCHAR(40) NULL COMMENT '该事件最近一次检测时间'`,
+  );
+}
+
+async function ensureLastStoryColumn() {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT COLUMN_NAME
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'events' AND COLUMN_NAME = 'last_story'
+     LIMIT 1`,
+    [dbName],
+  );
+  if (rows.length > 0) return;
+  await pool.query(
+    `ALTER TABLE events
+     ADD COLUMN last_story VARCHAR(80) NULL COMMENT '上次通知的时间窗口和形态'`,
   );
 }
 

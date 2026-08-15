@@ -18,6 +18,7 @@ type EventRow = RowDataPacket & {
   last_volume: number | null;
   last_fired_at: string | null;
   last_checked_at: string | null;
+  last_story: string | null;
   create_time: Date | string;
   update_time: Date | string;
 };
@@ -98,6 +99,7 @@ function asPool(row: EventRow): WatchPool {
     lastVolume: row.last_volume ?? undefined,
     lastFiredAt: row.last_fired_at ?? undefined,
     lastCheckedAt: row.last_checked_at ?? undefined,
+    lastStory: row.last_story ?? undefined,
     updatedAt: isoTime(row.update_time),
   };
 }
@@ -134,8 +136,16 @@ export type TickPatch = {
   lastYesPrice: number;
   lastVolume: number;
   lastFiredAt: string;
+  lastStory?: string;
   alerts: AlertRecord[];
   memberIds: string[];
+};
+
+export type QuoteRow = {
+  eventId: string;
+  yes: number;
+  volume: number;
+  at: Date;
 };
 
 export const store = {
@@ -220,7 +230,7 @@ export const store = {
     if (ids.length === 0) return { pools, members };
 
     const [eventRows] = await pool.query<EventRow[]>(
-      `SELECT event_id, event_title, last_yes_price, last_volume, last_fired_at, last_checked_at, create_time, update_time
+      `SELECT event_id, event_title, last_yes_price, last_volume, last_fired_at, last_checked_at, last_story, create_time, update_time
        FROM events
        WHERE event_id IN (?)`,
       [ids],
@@ -455,19 +465,65 @@ export const store = {
     return rows[0] ? asScan(rows[0]) : undefined;
   },
 
+  async loadQuoteSeries(eventIds: string[]) {
+    await dbReady();
+    const ids = boundedIds(eventIds);
+    const series = new Map<string, { at: number; yes: number; volume: number }[]>();
+    for (const id of ids) series.set(id, []);
+    if (ids.length === 0) return series;
+
+    const since6h = new Date(Date.now() - 6 * 60 * 60_000);
+    const since30d = new Date(Date.now() - 31 * 24 * 60 * 60_000);
+    const recentLimit = Math.min(80 * ids.length, 800);
+    const hourlyLimit = Math.min(750 * ids.length, 8000);
+
+    const [recent] = await pool.query<RowDataPacket[]>(
+      `SELECT event_id, yes_price, volume, create_time
+       FROM event_quotes
+       WHERE event_id IN (?) AND create_time >= ?
+       ORDER BY event_id, create_time
+       LIMIT ?`,
+      [ids, since6h, recentLimit],
+    );
+    const [hourly] = await pool.query<RowDataPacket[]>(
+      `SELECT event_id,
+              AVG(yes_price) AS yes_price,
+              AVG(volume) AS volume,
+              MIN(create_time) AS create_time
+       FROM event_quotes
+       WHERE event_id IN (?) AND create_time >= ? AND create_time < ?
+       GROUP BY event_id, FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(create_time) / 3600) * 3600)
+       ORDER BY event_id, create_time
+       LIMIT ?`,
+      [ids, since30d, since6h, hourlyLimit],
+    );
+    for (const row of [...hourly, ...recent]) {
+      const list = series.get(String(row.event_id)) ?? [];
+      list.push({
+        at: new Date(row.create_time as string | Date).getTime(),
+        yes: Number(row.yes_price),
+        volume: Number(row.volume),
+      });
+      series.set(String(row.event_id), list);
+    }
+    return series;
+  },
+
   async applyWatchResults(
     poolUpdates: WatchPool[],
     ticks: TickPatch[],
     checked: { eventId: string; checkedAt: string }[] = [],
+    quotes: QuoteRow[] = [],
   ) {
     await dbReady();
-    const eventMap = new Map<string, { title: string; yes: number; vol: number; firedAt?: string }>();
+    const eventMap = new Map<string, { title: string; yes: number; vol: number; firedAt?: string; story?: string }>();
     for (const row of poolUpdates) {
       eventMap.set(row.eventId, {
         title: row.eventTitle,
         yes: row.lastYesPrice ?? 0,
         vol: row.lastVolume ?? 0,
         firedAt: row.lastFiredAt,
+        story: row.lastStory,
       });
     }
     for (const tick of ticks) {
@@ -476,23 +532,25 @@ export const store = {
         yes: tick.lastYesPrice,
         vol: tick.lastVolume,
         firedAt: tick.lastFiredAt,
+        story: tick.lastStory,
       });
     }
 
     const eventIds = [...eventMap.keys()];
     if (eventIds.length > 0) {
       await pool.query(
-        `INSERT INTO events (event_id, event_title, last_yes_price, last_volume, last_fired_at)
+        `INSERT INTO events (event_id, event_title, last_yes_price, last_volume, last_fired_at, last_story)
          VALUES ?
          ON DUPLICATE KEY UPDATE
            event_title = VALUES(event_title),
            last_yes_price = VALUES(last_yes_price),
            last_volume = VALUES(last_volume),
-           last_fired_at = VALUES(last_fired_at)`,
+           last_fired_at = VALUES(last_fired_at),
+           last_story = COALESCE(VALUES(last_story), last_story)`,
         [
           eventIds.map((id) => {
             const row = eventMap.get(id)!;
-            return [id, row.title, row.yes, row.vol, row.firedAt ?? null];
+            return [id, row.title, row.yes, row.vol, row.firedAt ?? null, row.story ?? null];
           }),
         ],
       );
@@ -518,6 +576,24 @@ export const store = {
           ]),
         ],
       );
+    }
+
+    const quoteRows = quotes.slice(0, IN_LIMIT * 40);
+    if (quoteRows.length > 0) {
+      await pool.query(
+        `INSERT INTO event_quotes (event_id, yes_price, volume, create_time)
+         VALUES ?`,
+        [quoteRows.map((row) => [row.eventId, row.yes, row.volume, row.at])],
+      );
+      const quoteEventIds = boundedIds(quoteRows.map((row) => row.eventId));
+      if (quoteEventIds.length > 0) {
+        await pool.query(
+          `DELETE FROM event_quotes
+           WHERE event_id IN (?) AND create_time < ?
+           LIMIT 500`,
+          [quoteEventIds, new Date(Date.now() - 32 * 24 * 60 * 60_000)],
+        );
+      }
     }
 
     const checkedIds = boundedIds(checked.map((row) => row.eventId));

@@ -215,7 +215,7 @@ app.post("/internal/tick", async (req, res) => {
   const force = readQuery(req, "force") === "1";
   const interval = watchIntervalMs();
   const eventIds = await store.listWatchedEventIds();
-  const snap = await store.loadWatchSnapshot(eventIds);
+  const [snap, quoteMap] = await Promise.all([store.loadWatchSnapshot(eventIds), store.loadQuoteSeries(eventIds)]);
   pulseLog("worker", `本轮盯盘 ${eventIds.length} 个事件，间隔 ${Math.round(interval / 60000)} 分钟${force ? "，强制" : ""}`);
 
   const outcomes = [];
@@ -247,6 +247,10 @@ app.post("/internal/tick", async (req, res) => {
         prevYes: pool?.lastYesPrice ?? members[0]?.lastYesPrice,
         prevVolume: pool?.lastVolume ?? members[0]?.lastVolume,
         initial: neverNotified,
+        force,
+        lastStory: pool?.lastStory,
+        lastFiredYes: pool?.lastYesPrice,
+        quotes: quoteMap.get(eventId) ?? [],
       }),
     );
   }
@@ -259,7 +263,7 @@ app.post("/internal/tick", async (req, res) => {
 
 async function scanNeverNotified() {
   const eventIds = await store.listWatchedEventIds();
-  const snap = await store.loadWatchSnapshot(eventIds);
+  const [snap, quoteMap] = await Promise.all([store.loadWatchSnapshot(eventIds), store.loadQuoteSeries(eventIds)]);
   const pending = eventIds.filter((id) => !snap.pools.get(id)?.lastFiredAt);
   if (pending.length === 0) return;
   pulseLog("boot", `有 ${pending.length} 个已订阅但还没扫过的盘，立刻开扫`);
@@ -276,6 +280,9 @@ async function scanNeverNotified() {
         prevYes: pool?.lastYesPrice ?? members[0]?.lastYesPrice,
         prevVolume: pool?.lastVolume ?? members[0]?.lastVolume,
         initial: true,
+        lastStory: pool?.lastStory,
+        lastFiredYes: pool?.lastYesPrice,
+        quotes: quoteMap.get(eventId) ?? [],
       }),
     );
   }

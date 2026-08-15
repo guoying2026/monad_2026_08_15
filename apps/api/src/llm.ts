@@ -2,6 +2,8 @@ import type { MarketEvent, ScanReport } from "@pulse/shared";
 import { config } from "./config.js";
 import type { EvidenceItem } from "./evidence.js";
 import { pulseLog } from "./log.js";
+import type { MoveStory } from "./horizon.js";
+import { storyLine } from "./horizon.js";
 import type { PriceSwing } from "./markets.js";
 
 function pct(n: number) {
@@ -137,20 +139,20 @@ function cite(items: EvidenceItem[]) {
     .join("；");
 }
 
-export function explainFromEvidence(event: MarketEvent, swing: PriceSwing, evidence: EvidenceItem[]) {
-  const head = moveLine(event, swing);
+export function explainFromEvidence(event: MarketEvent, swing: PriceSwing, evidence: EvidenceItem[], story?: MoveStory | null) {
+  const head = story ? `「${event.title}」${storyLine(story)}。` : moveLine(event, swing);
   const news = evidence.filter((e) => e.kind === "news");
   const social = evidence.filter((e) => e.kind === "social");
   const flow = evidence.filter((e) => e.kind === "flow");
-  const dir = swing.deltaYes >= 0 ? "涨" : "跌";
+  const dir = (story?.delta ?? swing.deltaYes) >= 0 ? "涨" : "跌";
   if (news[0] || social[0]) {
     const lead = news[0] || social[0];
-    return `${head}之所以${dir}，是因为公开信息出现：${lead.title}。${cite(evidence)}`;
+    return `${head}之所以${dir}，是因为这段时间的公开信息出现：${lead.title}。${cite(evidence)}`;
   }
   if (flow[0]) {
     return `${head}公开新闻和社交没有对应头条，${dir}更像是盘口资金在动：${flow[0].title}。`;
   }
-  return `${head}公开新闻、社交和近期成交都没有抓到对应线索，这次${dir}更像是薄书上的盘内波动，而不是新消息定价。`;
+  return `${head}公开新闻、社交没有抓到对应头条。${story?.trend === "steady_down" || story?.trend === "steady_up" ? `形态是${story.trendLabel}，更像这段时间里的持续定价，而不是单次突发消息。` : "更像是盘内波动。"}`;
 }
 
 async function chatJson(system: string, user: string) {
@@ -183,26 +185,28 @@ export async function explainSwing(
   swing: PriceSwing,
   evidence: EvidenceItem[],
   mode: "initial" | "swing" = "swing",
+  story?: MoveStory | null,
 ) {
-  const fallback = explainFromEvidence(event, swing, evidence);
+  const fallback = explainFromEvidence(event, swing, evidence, story);
   if (!config.openaiKey) {
     pulseLog(event.title, "没有 LLM Key，用规则拼原因");
     return fallback;
   }
   const system =
     mode === "initial"
-      ? "你是 Pulse，预测市场盯盘分析员。这是用户刚盯上的盘。用中文说明当前 YES 概率处在什么位置、新闻/社交/资金在说什么。必须回答现在为什么是这个价。只根据证据，禁止编造头条。返回 JSON {why: string}，2～4 句。"
-      : "你是 Pulse，预测市场盯盘分析员。必须用中文回答这次 YES 概率为什么涨或为什么跌。只根据提供的新闻、社交和成交证据，禁止编造未出现的头条。返回 JSON {why: string}，2～4 句，先说涨跌，再给原因，并点名依据。";
-  pulseLog(event.title, `调用 ${config.openaiModel} 写原因（${mode === "initial" ? "首次开盘" : "波动"}）`);
+      ? "你是 Pulse，预测市场盯盘分析员。这是用户刚盯上的盘。用中文说明当前 YES 概率处在什么位置、更长周期（1天/7天/30天）怎么走、新闻/社交/资金在说什么。必须回答现在为什么是这个价。只根据证据，禁止编造头条。返回 JSON {why: string}，2～4 句。"
+      : "你是 Pulse，预测市场盯盘分析员。必须用中文回答指定时间窗口里 YES 为什么涨或跌。5分钟的小波动不是重点，要解释主窗口（可能是1小时、1天或1个月）以及形态（匀速/加速/跳变）。只根据证据，禁止编造头条。返回 JSON {why: string}，2～4 句，先说窗口和涨跌，再给原因。";
+  pulseLog(event.title, `调用 ${config.openaiModel} 写原因（${mode === "initial" ? "首次开盘" : story?.label ?? "波动"}）`);
   try {
     const parsed = await chatJson(
       system,
       JSON.stringify({
         title: event.title,
         question: event.question,
-        from: swing.prevYes,
+        story,
+        from: story?.from ?? swing.prevYes,
         to: event.yesPrice,
-        deltaYes: swing.deltaYes,
+        deltaYes: story?.delta ?? swing.deltaYes,
         volumeRatio: swing.volumeRatio,
         evidence,
       }),

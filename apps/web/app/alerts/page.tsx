@@ -91,6 +91,11 @@ function AlertsInner() {
               </span>
             </div>
             <h3 className="mt-2 text-sm font-medium">{a.eventTitle}</h3>
+            {(a.snapshot.window || a.snapshot.trend) && (
+              <p className="mt-1 text-xs text-accent">
+                {[a.snapshot.window, a.snapshot.trend].filter(Boolean).join(" · ")}
+              </p>
+            )}
             <p className="mt-1 text-sm text-muted">{a.reason}</p>
             {a.snapshot.sources && a.snapshot.sources.length > 0 && (
               <ul className="mt-2 space-y-1 text-xs text-muted">
