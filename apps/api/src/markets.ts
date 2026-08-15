@@ -132,19 +132,25 @@ export async function listEvents(limit = 12): Promise<MarketEvent[]> {
   return DEMO;
 }
 
-function parseQuery(raw: string): { slug?: string; text: string } {
+function parseQuery(raw: string): { slugs: string[]; text: string } {
   const text = raw.trim();
   try {
     const url = new URL(text);
     if (url.hostname.includes("polymarket.com")) {
       const parts = url.pathname.split("/").filter(Boolean);
       const idx = parts.findIndex((p) => p === "event" || p === "market");
-      if (idx >= 0 && parts[idx + 1]) return { slug: parts[idx + 1], text: parts[idx + 1] };
+      if (idx >= 0 && parts[idx + 1]) {
+        const slug = decodeURIComponent(parts[idx + 1]);
+        const slugs = [slug];
+        const stripped = slug.replace(/-\d+$/, "");
+        if (stripped && stripped !== slug) slugs.push(stripped);
+        return { slugs, text: slug };
+      }
     }
   } catch {
     // not a URL
   }
-  return { text };
+  return { slugs: [], text };
 }
 
 async function bySlug(slug: string): Promise<MarketEvent[]> {
@@ -154,7 +160,7 @@ async function bySlug(slug: string): Promise<MarketEvent[]> {
   if (!res.ok) return [];
   const rows = (await res.json()) as GammaEvent[];
   return rows
-    .filter((row) => !row.slug || row.slug === slug)
+    .filter((row) => row.slug === slug)
     .map(fromGamma)
     .filter((x): x is MarketEvent => Boolean(x));
 }
@@ -163,7 +169,7 @@ export async function searchEvents(query: string, limit = 12): Promise<MarketEve
   const q = query.trim();
   if (!q) return listEvents(limit);
 
-  const { slug, text } = parseQuery(q);
+  const { slugs, text } = parseQuery(q);
   const found: MarketEvent[] = [];
   const seen = new Set<string>();
   const push = (rows: MarketEvent[]) => {
@@ -175,7 +181,7 @@ export async function searchEvents(query: string, limit = 12): Promise<MarketEve
   };
 
   try {
-    if (slug) {
+    for (const slug of slugs) {
       push(await bySlug(slug));
       if (found.length > 0) return found;
     }

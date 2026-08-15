@@ -26,6 +26,7 @@ export default function ScanPage() {
   const [busy, setBusy] = useState<"scan" | "sub" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const searchGen = useRef(0);
+  const queryRef = useRef("");
   const debounceRef = useRef<number>(0);
 
   useEffect(() => {
@@ -36,32 +37,42 @@ export default function ScanPage() {
 
   async function runSearch(raw: string) {
     const q = raw.trim();
+    queryRef.current = q;
     const gen = ++searchGen.current;
     setError(null);
     setLoadingList(true);
     setSearched(Boolean(q));
+    if (q) setEventId("");
     try {
       const rows = await fetchEvents(q);
-      if (gen !== searchGen.current) return;
-      setEvents(rows);
-      setEventId(rows[0]?.id ?? "");
+      if (stale(gen, q)) return;
+      const hit = pickSearchHit(rows, q);
+      const ordered = hit ? [hit, ...rows.filter((e) => e.id !== hit.id)] : rows;
+      setEvents(ordered);
+      setEventId(hit?.id ?? "");
     } catch (err) {
-      if (gen !== searchGen.current) return;
+      if (stale(gen, q)) return;
       setError(friendly(err, t));
     } finally {
-      if (gen === searchGen.current) setLoadingList(false);
+      if (!stale(gen, q)) setLoadingList(false);
     }
+  }
+
+  function stale(gen: number, q: string) {
+    return gen !== searchGen.current || queryRef.current !== q;
   }
 
   function onQueryChange(value: string) {
     setQuery(value);
-    window.clearTimeout(debounceRef.current);
     const trimmed = value.trim();
+    queryRef.current = trimmed;
+    window.clearTimeout(debounceRef.current);
     if (!trimmed) {
       void runSearch("");
       return;
     }
-    if (/polymarket\.com\/(event|market)\//i.test(trimmed)) {
+    setEventId("");
+    if (polymarketSlug(trimmed)) {
       void runSearch(trimmed);
       return;
     }
@@ -362,4 +373,40 @@ function friendly(err: unknown, t: (key: "errCancelled" | "errFunds") => string)
   if (/user rejected|denied|cancelled/i.test(message)) return t("errCancelled");
   if (/insufficient/i.test(message)) return t("errFunds");
   return message;
+}
+
+function polymarketSlug(raw: string): string | undefined {
+  const text = raw.trim();
+  try {
+    const url = new URL(text);
+    if (!url.hostname.includes("polymarket.com")) return undefined;
+    const parts = url.pathname.split("/").filter(Boolean);
+    const idx = parts.findIndex((p) => p === "event" || p === "market");
+    if (idx >= 0 && parts[idx + 1]) return decodeURIComponent(parts[idx + 1]);
+  } catch {
+    // not a URL
+  }
+  return undefined;
+}
+
+function pickSearchHit(rows: EventWithPool[], q: string): EventWithPool | undefined {
+  const slug = polymarketSlug(q);
+  if (slug) {
+    const hit = rows.find((e) => eventMatchesSlug(e, slug));
+    if (hit) return hit;
+    return undefined;
+  }
+  return rows[0];
+}
+
+function eventMatchesSlug(event: EventWithPool, slug: string): boolean {
+  const tail = event.url.split("/").filter(Boolean).pop() ?? "";
+  return (
+    event.id === slug ||
+    tail === slug ||
+    event.url.includes(`/event/${slug}`) ||
+    event.url.includes(`/market/${slug}`) ||
+    slug.startsWith(`${tail}-`) ||
+    tail.startsWith(`${slug}-`)
+  );
 }
