@@ -34,6 +34,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Script id="theme-boot" strategy="beforeInteractive">
           {`try{var t=localStorage.getItem('pulse:theme');document.documentElement.classList.toggle('dark',t==='dark');document.documentElement.classList.toggle('light',t!=='dark')}catch(e){}`}
         </Script>
+        <Script id="ignore-ext-errors" strategy="beforeInteractive">
+          {`(function(){function ign(m,s){m=String(m||'');s=String(s||'');return s.indexOf('chrome-extension://')===0||s.indexOf('moz-extension://')===0||m.indexOf('sseError')!==-1}window.addEventListener('error',function(e){if(ign(e.message,e.filename)){e.preventDefault();e.stopImmediatePropagation()}},true);window.addEventListener('unhandledrejection',function(e){var r=e.reason;if(ign(r&&r.message||r,'')){e.preventDefault();e.stopImmediatePropagation()}},true)})()`}
+        </Script>
         <Providers>
           <Nav />
           {children}
