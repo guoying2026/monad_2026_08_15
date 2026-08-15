@@ -34,8 +34,8 @@ export function buildAgentCard(opts: {
     type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
     name: AGENT_NAME,
     description:
-      `Monad prediction-market watch agent. Pays and settles in USDC via x402. ` +
-      `Scan or watch any Polymarket event for $0.01 USDC. One compute per event, then fan-out. ` +
+      `Monad prediction-market watch agent. Watch any Polymarket event for $0.01 USDC via x402. ` +
+      `Personal scan reports are free. One compute per event, then fan-out. ` +
       `Receiver: ${opts.payTo} on ${opts.network.displayName}.`,
     image: `${web}/pulse.svg`,
     services: [

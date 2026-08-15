@@ -115,8 +115,8 @@ app.post("/scan", async (req, res) => {
     eventId: event.id,
     event,
     ...analysis,
-    paid: !config.skipX402,
-    paymentTx: paymentTxFromRequest(req),
+    paid: false,
+    paymentTx: undefined,
     createdAt: new Date().toISOString(),
   });
   res.json({ report });

@@ -52,16 +52,6 @@ export function createX402Middleware(): RequestHandler {
 
   return paymentMiddleware(
     {
-      "POST /scan": {
-        accepts: {
-          scheme: "exact",
-          price: config.x402Price,
-          network: config.network.caip2,
-          payTo: config.payTo,
-        },
-        description: "Pulse market scan report",
-        mimeType: "application/json",
-      },
       "POST /subscribe": {
         accepts: {
           scheme: "exact",

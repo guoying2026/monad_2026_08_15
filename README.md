@@ -1,6 +1,6 @@
 # Pulse — Monad 上的 ERC-8004 + x402 预测市场 Agent
 
-付 $0.01 USDC 换一份个人扫盘报告，或订阅一个事件的盯盘（也是 $0.01）。每个盘只计算一次，再扇出通知。Agent 自己发现 YES 概率波动后再推 Telegram。
+个人扫盘报告免费。付 $0.01 USDC 订阅一个 Polymarket 事件的盯盘。每个盘只计算一次，再扇出通知。Agent 自己发现 YES 概率波动后再推 Telegram。
 
 适合 Monad：~0.3s 出块、单槽最终性、极低 gas，小额 USDC 按次结算不会堵、也不会被手续费吃掉。
 
@@ -9,7 +9,7 @@
 ```
 本地环境 → Monad RPC → 注册 ERC-8004
     → 可调用服务（/scan 分析 · /subscribe 盯盘）
-    → x402 收费（没付钱拿不到结果）
+    → x402 收费盯盘（/subscribe $0.01；/scan 报告免费）
     → Worker 轮询 + Telegram
     → 三屏前端 Demo
     → 测试网 / 主网
@@ -20,7 +20,7 @@
 | 0 准备 | `.env` + `pnpm install` | API `/health` 200 |
 | 1 身份 | `pnpm register` 铸 ERC-721 | [8004scan](https://www.8004scan.io) 能搜到 Pulse |
 | 2 能力 | `SKIP_X402=true` 调 `/scan` `/subscribe` | 报告站得住；Worker 能推/打日志 |
-| 3 付费 | `SKIP_X402=false`，钱包付 $0.01 | 没付款 402；付款后出报告 |
+| 3 付费 | `SKIP_X402=false`，钱包付 $0.01 盯盘 | `/subscribe` 没付款 402；`/scan` 免费出报告 |
 | 4 声誉 | 结果页点 Useful / Inaccurate | 调 Reputation Registry（可先 Mock） |
 | 5 前端 | `/` `/scan` `/alerts` | 评委三屏 |
 | 6 部署 | Railway / Vercel + 60–90s 录像 | README 能讲清 8004 / x402 / Monad |
@@ -102,7 +102,7 @@ PAY_TO_ADDRESS=0x你的收款地址
 FACILITATOR_URL=https://x402-facilitator.molandak.org
 ```
 
-前端连钱包 → 签 EIP-3009（gas 由 facilitator 出）→ 自动带支付头重试 `/scan` 或 `/subscribe`。
+前端连钱包 → 签 EIP-3009（gas 由 facilitator 出）→ 自动带支付头重试 `/subscribe`。`/scan` 个人报告不收费。
 
 | 网络 | CAIP-2 | USDC | EIP-712 name |
 | --- | --- | --- | --- |
@@ -116,14 +116,14 @@ FACILITATOR_URL=https://x402-facilitator.molandak.org
 ## 阶段 5：三屏
 
 1. `/` Agent 介绍 + 8004scan 链接
-2. `/scan` 选事件 + 一键付费（报告或订阅）
+2. `/scan` 选事件：免费出报告，或付 $0.01 盯盘
 3. `/alerts` 报告 / 通知历史（原因 + 可选 tx）+ 反馈
 
 ## 阶段 6：部署
 
 - **API + Worker**：Railway / Render / VPS，环境变量切 `MONAD_NETWORK` 与 `PUBLIC_API_URL`（必须 HTTPS，8004scan 才打得开 card）
 - **Web**：Vercel，`NEXT_PUBLIC_API_URL` 指到 API
-- Demo 60–90s：注册 → 付 $0.01 → 出报告/推送 →（可选）反馈
+- Demo 60–90s：注册 → 免费出报告 → 付 $0.01 盯盘/推送 →（可选）反馈
 
 ## 为何是 Monad 而不是别的 L2
 

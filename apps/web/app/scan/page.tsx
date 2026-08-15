@@ -89,13 +89,13 @@ export default function ScanPage() {
 
   const selected = events.find((e) => e.id === eventId);
 
-  async function call(path: string, body: unknown) {
+  async function postJson(path: string, body: unknown, pay: boolean) {
     const init: RequestInit = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     };
-    if (cfg && !cfg.skipX402) {
+    if (pay && cfg && !cfg.skipX402) {
       if (!walletClient || !address) throw new Error(t("errConnectMonad"));
       return paidFetch(walletClient, address, `${apiUrl}${path}`, init);
     }
@@ -106,7 +106,7 @@ export default function ScanPage() {
     setError(null);
     setBusy("scan");
     try {
-      const res = await call("/scan", { eventId });
+      const res = await postJson("/scan", { eventId }, false);
       if (!res.ok) throw new Error(await readErr(res));
       const data = (await res.json()) as { report: ScanReport };
       sessionStorage.setItem("pulse:lastScan", JSON.stringify(data.report));
@@ -126,12 +126,16 @@ export default function ScanPage() {
       if (wantEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
         throw new Error(t("errEmail"));
       }
-      const res = await call("/subscribe", {
-        eventId,
-        wallet: address,
-        email: wantEmail ? email.trim() : "",
-        chatId: wantTelegram ? chatId.trim() : "",
-      });
+      const res = await postJson(
+        "/subscribe",
+        {
+          eventId,
+          wallet: address,
+          email: wantEmail ? email.trim() : "",
+          chatId: wantTelegram ? chatId.trim() : "",
+        },
+        true,
+      );
       if (res.status === 409) throw new Error(t("errAlready"));
       if (!res.ok) throw new Error(await readErr(res));
       router.push("/alerts?watching=1");
@@ -334,22 +338,22 @@ export default function ScanPage() {
           <button
             type="button"
             disabled={!eventId || busy !== null}
-            onClick={() => void onScan()}
+            onClick={() => void onSubscribe()}
             className="btn-primary mt-6 w-full"
           >
-            {busy === "scan"
-              ? t("settling")
+            {busy === "sub"
+              ? t("opening")
               : isConnected || cfg?.skipX402
-                ? t("payScan")
-                : t("connectThenScan")}
+                ? t("payAlert")
+                : t("connectThenWatch")}
           </button>
           <button
             type="button"
             disabled={!eventId || busy !== null}
-            onClick={() => void onSubscribe()}
+            onClick={() => void onScan()}
             className="btn-ghost mt-3 w-full"
           >
-            {busy === "sub" ? t("opening") : t("payAlert")}
+            {busy === "scan" ? t("writingReport") : t("freeScan")}
           </button>
           {error && <p className="mt-4 text-sm text-danger">{error}</p>}
         </div>
