@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAccount, useWalletClient } from "wagmi";
-import type { ScanReport } from "@pulse/shared";
 import { apiUrl, fetchConfig, fetchEvents, polymarketSlug, type AgentConfig, type EventWithPool } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { paidFetch } from "@/lib/x402";
@@ -23,7 +22,7 @@ export default function ScanPage() {
   const [wantTelegram, setWantTelegram] = useState(false);
   const [email, setEmail] = useState("");
   const [chatId, setChatId] = useState("");
-  const [busy, setBusy] = useState<"scan" | "sub" | null>(null);
+  const [busy, setBusy] = useState<"sub" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const searchGen = useRef(0);
   const queryRef = useRef("");
@@ -100,22 +99,6 @@ export default function ScanPage() {
       return paidFetch(walletClient, address, `${apiUrl}${path}`, init);
     }
     return fetch(`${apiUrl}${path}`, init);
-  }
-
-  async function onScan() {
-    setError(null);
-    setBusy("scan");
-    try {
-      const res = await postJson("/scan", { eventId }, false);
-      if (!res.ok) throw new Error(await readErr(res));
-      const data = (await res.json()) as { report: ScanReport };
-      sessionStorage.setItem("pulse:lastScan", JSON.stringify(data.report));
-      router.push(`/alerts?scan=${data.report.id}`);
-    } catch (err) {
-      setError(friendly(err, t));
-    } finally {
-      setBusy(null);
-    }
   }
 
   async function onSubscribe() {
@@ -349,11 +332,11 @@ export default function ScanPage() {
           </button>
           <button
             type="button"
-            disabled={!eventId || busy !== null}
-            onClick={() => void onScan()}
+            disabled={busy !== null}
+            onClick={() => router.push("/alerts")}
             className="btn-ghost mt-3 w-full"
           >
-            {busy === "scan" ? t("writingReport") : t("freeScan")}
+            {t("viewHistory")}
           </button>
           {error && <p className="mt-4 text-sm text-danger">{error}</p>}
         </div>
