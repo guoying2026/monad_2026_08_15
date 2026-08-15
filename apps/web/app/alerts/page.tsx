@@ -3,11 +3,11 @@
 import { Suspense, useEffect, useState } from "react";
 import { useAccount, useWalletClient } from "wagmi";
 import type { AlertRecord, Subscription } from "@pulse/shared";
-import { apiUrl, fetchConfig, fetchHistory, fetchPayments, fetchSubscriptions, postTick, type AgentConfig } from "@/lib/api";
+import { apiUrl, confirmPayment, fetchConfig, fetchHistory, fetchPayments, fetchSubscriptions, postTick, type AgentConfig } from "@/lib/api";
 import { CopyButton } from "@/components/copy-button";
 import { useI18n } from "@/lib/i18n";
 import { network } from "@/lib/chain";
-import { paidFetch } from "@/lib/x402";
+import { paidFetch, paymentTxFromResponse } from "@/lib/x402";
 
 function shortHash(value: string) {
   if (value.length <= 12) return value;
@@ -111,7 +111,8 @@ function AlertsInner() {
                 {t("paymentWallet")} {shortHash(p.wallet)}
               </p>
               {p.paymentTx ? (
-                <div className="mt-2 flex items-center gap-1.5 text-xs">
+                <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="text-muted">{t("paymentTx")}</span>
                   <a
                     href={network.explorerTx(p.paymentTx)}
                     target="_blank"
@@ -125,11 +126,11 @@ function AlertsInner() {
                     href={network.explorerTx(p.paymentTx)}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-muted underline-offset-2 hover:underline"
+                    className="text-accent underline-offset-2 hover:underline"
                   >
                     {t("paymentOpenTx")}
                   </a>
-                </div>
+                </p>
               ) : !p.paid ? (
                 <div className="mt-2">
                   <button
@@ -154,8 +155,16 @@ function AlertsInner() {
                           cfg && !cfg.skipX402 && walletClient
                             ? await paidFetch(walletClient, address, `${apiUrl}/subscribe`, init)
                             : await fetch(`${apiUrl}/subscribe`, init);
-                        if (!res.ok) throw new Error(await res.text());
-                        await refreshTape();
+                          if (!res.ok) throw new Error(await res.text());
+                          const paymentTx = paymentTxFromResponse(res);
+                          if (paymentTx) {
+                            await confirmPayment({
+                              wallet: address,
+                              eventId: p.eventId,
+                              paymentTx,
+                            }).catch(() => undefined);
+                          }
+                          await refreshTape();
                       })()
                         .catch((err) => setPayNote(err instanceof Error ? err.message : t("feedbackFail")))
                         .finally(() => setPayingId(null));

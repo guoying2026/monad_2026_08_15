@@ -75,6 +75,16 @@ export async function fetchPayments(wallet?: string) {
   return res.json() as Promise<{ payments: Subscription[] }>;
 }
 
+export async function confirmPayment(input: { wallet: string; eventId: string; paymentTx: string }) {
+  const res = await fetch(`${apiUrl}/payments/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<{ subscription: Subscription }>;
+}
+
 export async function postTick() {
   const res = await fetch(`${apiUrl}/internal/tick?force=1`, { method: "POST" });
   if (!res.ok) throw new Error("tick failed");

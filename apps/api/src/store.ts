@@ -279,6 +279,26 @@ export const store = {
     return { pools, members };
   },
 
+  async attachPaymentTx(wallet: string, eventId: string, paymentTx: string) {
+    await dbReady();
+    await pool.query(
+      `UPDATE subscriptions
+       SET paid = 1, paid_usdc = ?, payment_tx = ?
+       WHERE wallet = ? AND event_id = ?
+       LIMIT 1`,
+      [WATCH_COST_USDC, paymentTx, wallet.toLowerCase(), eventId],
+    );
+    const [rows] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       WHERE wallet = ? AND event_id = ?
+       LIMIT 1`,
+      [wallet.toLowerCase(), eventId],
+    );
+    return rows[0] ? asSub(rows[0]) : undefined;
+  },
+
   async markPaid(input: { id: string; paymentTx?: string; chatId?: string; email?: string }) {
     await dbReady();
     await pool.query(

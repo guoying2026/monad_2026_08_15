@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAccount, useWalletClient } from "wagmi";
-import { apiUrl, fetchConfig, fetchEvents, polymarketSlug, type AgentConfig, type EventWithPool } from "@/lib/api";
+import { apiUrl, confirmPayment, fetchConfig, fetchEvents, polymarketSlug, type AgentConfig, type EventWithPool } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { paidFetch } from "@/lib/x402";
+import { paidFetch, paymentTxFromResponse } from "@/lib/x402";
 
 export default function ScanPage() {
   const { t } = useI18n();
@@ -122,6 +122,10 @@ export default function ScanPage() {
       );
       if (res.status === 409) throw new Error(t("errAlready"));
       if (!res.ok) throw new Error(await readErr(res));
+      const paymentTx = paymentTxFromResponse(res);
+      if (paymentTx) {
+        await confirmPayment({ wallet: address, eventId, paymentTx }).catch(() => undefined);
+      }
       router.push("/alerts?watching=1");
     } catch (err) {
       setError(friendly(err, t));

@@ -14,7 +14,17 @@ import { validEmail } from "./email.js";
 import { createX402Middleware, paymentTxFromRequest } from "./x402.js";
 
 const app = express();
-app.use(cors({ exposedHeaders: ["payment-required", "payment-response", "x-payment-response"] }));
+app.use(
+  cors({
+    exposedHeaders: [
+      "payment-required",
+      "payment-response",
+      "PAYMENT-RESPONSE",
+      "x-payment-response",
+      "X-PAYMENT-RESPONSE",
+    ],
+  }),
+);
 app.use(express.json({ limit: "1mb" }));
 
 function readQuery(req: { query: Record<string, unknown>; originalUrl?: string; url?: string }, key: string): string {
@@ -192,6 +202,22 @@ app.get("/subscriptions", async (req, res) => {
 app.get("/payments", async (req, res) => {
   const wallet = readQuery(req, "wallet");
   res.json({ payments: await store.listPayments(wallet || undefined) });
+});
+
+app.post("/payments/confirm", async (req, res) => {
+  const wallet = String(req.body?.wallet ?? "").trim();
+  const eventId = String(req.body?.eventId ?? "").trim();
+  const paymentTx = String(req.body?.paymentTx ?? "").trim();
+  if (!wallet || !eventId || !/^0x[0-9a-fA-F]{64}$/.test(paymentTx)) {
+    res.status(400).json({ error: "wallet, eventId and paymentTx required" });
+    return;
+  }
+  const subscription = await store.attachPaymentTx(wallet, eventId, paymentTx);
+  if (!subscription) {
+    res.status(404).json({ error: "subscription not found" });
+    return;
+  }
+  res.json({ subscription });
 });
 
 app.get("/alerts", async (req, res) => {
