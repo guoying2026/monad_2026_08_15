@@ -1,12 +1,13 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useAccount } from "wagmi";
+import { useAccount, useWalletClient } from "wagmi";
 import type { AlertRecord, Subscription } from "@pulse/shared";
-import { fetchHistory, fetchPayments, fetchSubscriptions, postTick } from "@/lib/api";
+import { apiUrl, fetchConfig, fetchHistory, fetchPayments, fetchSubscriptions, postTick, type AgentConfig } from "@/lib/api";
 import { CopyButton } from "@/components/copy-button";
 import { useI18n } from "@/lib/i18n";
 import { network } from "@/lib/chain";
+import { paidFetch } from "@/lib/x402";
 
 function shortHash(value: string) {
   if (value.length <= 12) return value;
@@ -16,11 +17,15 @@ function shortHash(value: string) {
 function AlertsInner() {
   const { t } = useI18n();
   const { address } = useAccount();
+  const { data: walletClient } = useWalletClient();
+  const [cfg, setCfg] = useState<AgentConfig | null>(null);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [watches, setWatches] = useState<Subscription[]>([]);
   const [payments, setPayments] = useState<Subscription[]>([]);
   const [tickBusy, setTickBusy] = useState(false);
   const [tickNote, setTickNote] = useState<string | null>(null);
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const [payNote, setPayNote] = useState<string | null>(null);
 
   async function refreshTape() {
     const [history, subs, pay] = await Promise.all([
@@ -34,6 +39,7 @@ function AlertsInner() {
   }
 
   useEffect(() => {
+    fetchConfig().then(setCfg).catch(() => undefined);
     void refreshTape().catch(() => undefined);
     const id = window.setInterval(() => {
       void refreshTape().catch(() => undefined);
@@ -125,11 +131,57 @@ function AlertsInner() {
                   </a>
                 </div>
               ) : (
-                <p className="mt-2 text-xs text-muted">{t("paymentNoTx")}</p>
+                <div className="mt-2 space-y-2">
+                  <p className="text-xs text-muted">{t("paymentNoTx")}</p>
+                  <p className="text-xs text-muted">{t("paymentNeedUsdc")}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href="https://faucet.circle.com/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs font-medium text-accent underline-offset-2 hover:underline"
+                    >
+                      {t("paymentFaucet")}
+                    </a>
+                    <button
+                      type="button"
+                      disabled={payingId !== null || !address}
+                      onClick={() => {
+                        if (!address) return;
+                        setPayingId(p.id);
+                        setPayNote(null);
+                        void (async () => {
+                          const init: RequestInit = {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({
+                              eventId: p.eventId,
+                              wallet: address,
+                              email: p.email,
+                              chatId: p.chatId,
+                            }),
+                          };
+                          const res =
+                            cfg && !cfg.skipX402 && walletClient
+                              ? await paidFetch(walletClient, address, `${apiUrl}/subscribe`, init)
+                              : await fetch(`${apiUrl}/subscribe`, init);
+                          if (!res.ok) throw new Error(await res.text());
+                          await refreshTape();
+                        })()
+                          .catch((err) => setPayNote(err instanceof Error ? err.message : t("feedbackFail")))
+                          .finally(() => setPayingId(null));
+                      }}
+                      className="btn-primary !px-3 !py-1 !text-xs"
+                    >
+                      {payingId === p.id ? t("paymentRetrying") : t("paymentRetry")}
+                    </button>
+                  </div>
+                </div>
               )}
             </article>
           ))}
         </div>
+        {payNote && <p className="px-5 pb-4 text-xs text-danger">{payNote}</p>}
       </section>
 
       <h2 className="mt-10 text-sm font-semibold text-fg">{t("alertHistory")}</h2>

@@ -279,6 +279,41 @@ export const store = {
     return { pools, members };
   },
 
+  async markPaid(input: { id: string; paymentTx?: string; chatId?: string; email?: string }) {
+    await dbReady();
+    await pool.query(
+      `UPDATE subscriptions
+       SET paid = 1, paid_usdc = ?, payment_tx = COALESCE(?, payment_tx),
+           chat_id = CASE WHEN ? <> '' THEN ? ELSE chat_id END,
+           email = CASE WHEN ? <> '' THEN ? ELSE email END
+       WHERE id = ?
+       LIMIT 1`,
+      [
+        WATCH_COST_USDC,
+        input.paymentTx ?? null,
+        input.chatId ?? "",
+        input.chatId ?? "",
+        input.email ?? "",
+        input.email ?? "",
+        input.id,
+      ],
+    );
+    const [rows] = await pool.query<SubRow[]>(
+      `SELECT id, event_id, wallet, event_title, chat_id, email, paid, paid_usdc, payment_tx, active,
+              last_yes_price, last_volume, last_fired_at, create_time, update_time
+       FROM subscriptions
+       WHERE id = ?
+       LIMIT 1`,
+      [input.id],
+    );
+    if (!rows[0]) throw new Error("subscription not found");
+    const [countRows] = await pool.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS members FROM subscriptions WHERE event_id = ? AND active = 1`,
+      [rows[0].event_id],
+    );
+    return { subscription: asSub(rows[0]), quote: quoteJoin(Number(countRows[0]?.members ?? 1), rows[0].event_id) };
+  },
+
   async joinWatch(input: {
     id: string;
     wallet: string;
@@ -303,6 +338,14 @@ export const store = {
       [wallet, input.eventId],
     );
     if (existing[0]) {
+      if (!existing[0].paid && input.paid) {
+        return store.markPaid({
+          id: existing[0].id,
+          paymentTx: input.paymentTx,
+          chatId: input.chatId,
+          email: input.email,
+        });
+      }
       return { error: "already-joined" as const, subscription: asSub(existing[0]) };
     }
 

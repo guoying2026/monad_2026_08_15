@@ -4,20 +4,42 @@ import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import type { RequestHandler } from "express";
 import { config } from "./config.js";
 
-export function paymentTxFromRequest(req: { headers: Record<string, unknown> }): string | undefined {
-  const raw =
-    (req.headers["payment-response"] as string | undefined) ||
-    (req.headers["x-payment-response"] as string | undefined);
-  if (!raw) return undefined;
+function decodePaymentPayload(raw: string): string | undefined {
+  const text = raw.trim();
+  if (/^0x[0-9a-fA-F]{64}$/.test(text)) return text;
+  const tryJson = (value: string) => {
+    try {
+      const decoded = JSON.parse(value) as { transaction?: string; txHash?: string; hash?: string };
+      const hash = decoded.transaction || decoded.txHash || decoded.hash;
+      return hash && /^0x[0-9a-fA-F]{64}$/.test(hash) ? hash : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const direct = tryJson(text);
+  if (direct) return direct;
   try {
-    const decoded = JSON.parse(Buffer.from(raw, "base64").toString("utf8")) as {
-      transaction?: string;
-      txHash?: string;
-    };
-    return decoded.transaction || decoded.txHash;
+    return tryJson(Buffer.from(text, "base64").toString("utf8"));
   } catch {
     return undefined;
   }
+}
+
+export function paymentTxFromRequest(req: { headers: Record<string, unknown> }): string | undefined {
+  const keys = [
+    "payment-response",
+    "x-payment-response",
+    "payment-signature",
+    "x-payment",
+  ];
+  for (const key of keys) {
+    const raw = req.headers[key];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof value !== "string" || !value.trim()) continue;
+    const hash = decodePaymentPayload(value);
+    if (hash) return hash;
+  }
+  return undefined;
 }
 
 export function createX402Middleware(): RequestHandler {
