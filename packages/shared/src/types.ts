@@ -59,6 +59,7 @@ export type WatchPool = {
   lastYesPrice?: number;
   lastVolume?: number;
   lastFiredAt?: string;
+  lastCheckedAt?: string;
   updatedAt: string;
 };
 

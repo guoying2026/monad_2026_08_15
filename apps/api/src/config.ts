@@ -1,6 +1,6 @@
 import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
-import { resolveNetwork, X402_PRICE_LABEL } from "@pulse/shared";
+import { resolveNetwork, watchIntervalMs as readWatchInterval, X402_PRICE_LABEL } from "@pulse/shared";
 
 loadEnv({ path: resolve(process.cwd(), "../../.env") });
 loadEnv({ path: resolve(process.cwd(), ".env") });
@@ -35,3 +35,9 @@ export const config = {
   emailFrom: env("EMAIL_FROM", "Pulse <onboarding@resend.dev>"),
   databaseUrl: env("DATABASE_URL", "mysql://root@127.0.0.1:3306/pulse"),
 };
+
+export function watchIntervalMs() {
+  loadEnv({ path: resolve(process.cwd(), "../../.env"), override: true });
+  loadEnv({ path: resolve(process.cwd(), ".env"), override: true });
+  return readWatchInterval(process.env);
+}

@@ -17,6 +17,7 @@ type EventRow = RowDataPacket & {
   last_yes_price: number | null;
   last_volume: number | null;
   last_fired_at: string | null;
+  last_checked_at: string | null;
   create_time: Date | string;
   update_time: Date | string;
 };
@@ -96,6 +97,7 @@ function asPool(row: EventRow): WatchPool {
     lastYesPrice: row.last_yes_price ?? undefined,
     lastVolume: row.last_volume ?? undefined,
     lastFiredAt: row.last_fired_at ?? undefined,
+    lastCheckedAt: row.last_checked_at ?? undefined,
     updatedAt: isoTime(row.update_time),
   };
 }
@@ -218,7 +220,7 @@ export const store = {
     if (ids.length === 0) return { pools, members };
 
     const [eventRows] = await pool.query<EventRow[]>(
-      `SELECT event_id, event_title, last_yes_price, last_volume, last_fired_at, create_time, update_time
+      `SELECT event_id, event_title, last_yes_price, last_volume, last_fired_at, last_checked_at, create_time, update_time
        FROM events
        WHERE event_id IN (?)`,
       [ids],
@@ -453,7 +455,11 @@ export const store = {
     return rows[0] ? asScan(rows[0]) : undefined;
   },
 
-  async applyWatchResults(poolUpdates: WatchPool[], ticks: TickPatch[]) {
+  async applyWatchResults(
+    poolUpdates: WatchPool[],
+    ticks: TickPatch[],
+    checked: { eventId: string; checkedAt: string }[] = [],
+  ) {
     await dbReady();
     const eventMap = new Map<string, { title: string; yes: number; vol: number; firedAt?: string }>();
     for (const row of poolUpdates) {
@@ -511,6 +517,24 @@ export const store = {
             alert.paymentTx ?? null,
           ]),
         ],
+      );
+    }
+
+    const checkedIds = boundedIds(checked.map((row) => row.eventId));
+    if (checkedIds.length > 0) {
+      const checkedCase: string[] = [];
+      const checkedParams: unknown[] = [];
+      const atById = new Map(checked.map((row) => [row.eventId, row.checkedAt]));
+      for (const id of checkedIds) {
+        checkedCase.push("WHEN ? THEN ?");
+        checkedParams.push(id, atById.get(id) ?? null);
+      }
+      checkedParams.push(checkedIds);
+      await pool.query(
+        `UPDATE events
+         SET last_checked_at = CASE event_id ${checkedCase.join(" ")} END
+         WHERE event_id IN (?)`,
+        checkedParams,
       );
     }
 

@@ -26,6 +26,7 @@ const SCHEMA = [
     last_yes_price DOUBLE NULL,
     last_volume DOUBLE NULL,
     last_fired_at VARCHAR(40) NULL,
+    last_checked_at VARCHAR(40) NULL,
     ${AUDIT},
     PRIMARY KEY (event_id),
     KEY idx_events_update_time (update_time)
@@ -102,6 +103,7 @@ async function init() {
     await pool.query(sql);
   }
   await ensureAuditColumns();
+  await ensureLastCheckedColumn();
   await dropLegacyTimeColumns();
   console.log(`[db] mysql ${url.hostname}:${url.port || 3306}/${dbName}`);
 }
@@ -129,6 +131,21 @@ async function ensureAuditColumns() {
       );
     }
   }
+}
+
+async function ensureLastCheckedColumn() {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT COLUMN_NAME
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'events' AND COLUMN_NAME = 'last_checked_at'
+     LIMIT 1`,
+    [dbName],
+  );
+  if (rows.length > 0) return;
+  await pool.query(
+    `ALTER TABLE events
+     ADD COLUMN last_checked_at VARCHAR(40) NULL COMMENT '该事件最近一次检测时间'`,
+  );
 }
 
 async function dropLegacyTimeColumns() {

@@ -1,11 +1,22 @@
 import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
 
-loadEnv({ path: resolve(process.cwd(), "../../.env") });
-loadEnv({ path: resolve(process.cwd(), ".env") });
+function reloadEnv() {
+  loadEnv({ path: resolve(process.cwd(), "../../.env"), override: true });
+  loadEnv({ path: resolve(process.cwd(), ".env"), override: true });
+}
 
+function intervalMs() {
+  reloadEnv();
+  const minutes = Number(process.env.WATCH_INTERVAL_MINUTES?.trim());
+  if (Number.isFinite(minutes) && minutes > 0) return Math.round(minutes * 60_000);
+  const ms = Number(process.env.POLL_INTERVAL_MS?.trim());
+  if (Number.isFinite(ms) && ms > 0) return ms;
+  return 5 * 60_000;
+}
+
+reloadEnv();
 const api = (process.env.API_INTERNAL_URL || "http://localhost:4000").replace(/\/$/, "");
-const interval = Number(process.env.POLL_INTERVAL_MS || 20_000);
 
 async function tick() {
   try {
@@ -16,14 +27,18 @@ async function tick() {
       console.warn(`[worker] ${stamp} tick failed`, res.status, body);
       return;
     }
-    console.log(`[worker] ${stamp} fired=${body.fired ?? 0}`);
+    console.log(`[worker] ${stamp} fired=${body.fired ?? 0} next=${intervalMs()}ms`);
   } catch (err) {
     console.warn("[worker] api unreachable", err instanceof Error ? err.message : err);
   }
 }
 
-console.log(`Pulse worker → ${api}/internal/tick every ${interval}ms`);
-void tick();
-setInterval(() => {
-  void tick();
-}, interval);
+async function loop() {
+  await tick();
+  setTimeout(() => {
+    void loop();
+  }, intervalMs());
+}
+
+console.log(`Pulse worker → ${api}/internal/tick every ${intervalMs()}ms (WATCH_INTERVAL_MINUTES)`);
+void loop();

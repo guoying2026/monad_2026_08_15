@@ -3,7 +3,7 @@ import cors from "cors";
 import express from "express";
 import { buildAgentCard } from "@pulse/agent-card";
 import { reputationAbi } from "@pulse/shared";
-import { config } from "./config.js";
+import { config, watchIntervalMs } from "./config.js";
 import { formatUsdc, WATCH_COST_USDC, quoteJoin, type AlertRecord } from "@pulse/shared";
 import { analyzeEvent, explainSwing } from "./llm.js";
 import { gatherEvidence } from "./evidence.js";
@@ -196,21 +196,31 @@ app.get("/scans/:id", async (req, res) => {
   res.json({ report });
 });
 
-app.post("/internal/tick", async (_req, res) => {
+app.post("/internal/tick", async (req, res) => {
+  const force = readQuery(req, "force") === "1";
+  const interval = watchIntervalMs();
   const fired: string[] = [];
   const eventIds = await store.listWatchedEventIds();
   const snap = await store.loadWatchSnapshot(eventIds);
   const poolUpdates: { eventId: string; eventTitle: string; lastYesPrice: number; lastVolume: number; lastFiredAt?: string; updatedAt: string }[] = [];
   const ticks: { eventId: string; eventTitle: string; lastYesPrice: number; lastVolume: number; lastFiredAt: string; alerts: AlertRecord[]; memberIds: string[] }[] = [];
+  const checked: { eventId: string; checkedAt: string }[] = [];
 
   for (const eventId of eventIds) {
+    const pool = snap.pools.get(eventId);
+    if (!force && pool?.lastCheckedAt && Date.now() - Date.parse(pool.lastCheckedAt) < interval) {
+      continue;
+    }
+
     const event = await getEvent(eventId);
     if (!event) continue;
 
     const members = snap.members.get(eventId) ?? [];
     if (members.length === 0) continue;
 
-    const pool = snap.pools.get(eventId);
+    const checkedAt = new Date().toISOString();
+    checked.push({ eventId, checkedAt });
+
     const prevYes = pool?.lastYesPrice ?? members[0]?.lastYesPrice;
     const prevVolume = pool?.lastVolume ?? members[0]?.lastVolume;
     if (prevYes == null || prevVolume == null) {
@@ -219,14 +229,14 @@ app.post("/internal/tick", async (_req, res) => {
         eventTitle: event.title,
         lastYesPrice: event.yesPrice,
         lastVolume: event.volume,
-        updatedAt: new Date().toISOString(),
+        updatedAt: checkedAt,
       });
       continue;
     }
 
     const swing = detectSwing(event, prevYes, prevVolume);
     if (!swing) continue;
-    if (pool?.lastFiredAt && Date.now() - Date.parse(pool.lastFiredAt) < 2 * 60_000) continue;
+    if (!force && pool?.lastFiredAt && Date.now() - Date.parse(pool.lastFiredAt) < interval) continue;
 
     const evidence = await gatherEvidence(event);
     const reason = await explainSwing(event, swing, evidence);
@@ -280,8 +290,8 @@ app.post("/internal/tick", async (_req, res) => {
     });
   }
 
-  await store.applyWatchResults(poolUpdates, ticks);
-  res.json({ fired: fired.length, ids: fired, events: eventIds.length });
+  await store.applyWatchResults(poolUpdates, ticks, checked);
+  res.json({ fired: fired.length, ids: fired, events: eventIds.length, intervalMs: interval });
 });
 
 void store.ready().then(() => {
