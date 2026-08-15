@@ -2,8 +2,12 @@ import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
 import { resolveNetwork, watchIntervalMs as readWatchInterval, X402_PRICE_LABEL } from "@pulse/shared";
 
-loadEnv({ path: resolve(process.cwd(), "../../.env") });
-loadEnv({ path: resolve(process.cwd(), ".env") });
+function reloadEnv() {
+  loadEnv({ path: resolve(process.cwd(), "../../.env"), override: true });
+  loadEnv({ path: resolve(process.cwd(), ".env"), override: true });
+}
+
+reloadEnv();
 
 function env(name: string, fallback = ""): string {
   return process.env[name]?.trim() || fallback;
@@ -37,7 +41,14 @@ export const config = {
 };
 
 export function watchIntervalMs() {
-  loadEnv({ path: resolve(process.cwd(), "../../.env"), override: true });
-  loadEnv({ path: resolve(process.cwd(), ".env"), override: true });
+  reloadEnv();
   return readWatchInterval(process.env);
+}
+
+export function telegramCreds() {
+  reloadEnv();
+  return {
+    token: env("TELEGRAM_BOT_TOKEN"),
+    defaultChat: env("TELEGRAM_DEFAULT_CHAT_ID"),
+  };
 }
