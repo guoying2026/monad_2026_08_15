@@ -282,15 +282,44 @@ export default function ScanPage() {
               className="field mt-2"
             />
           </label>
-          <label className="mt-3 block text-xs font-medium text-muted">
+          <p className="mt-2 text-xs leading-5 text-muted">{t("emailHint")}</p>
+          <label className="mt-4 block text-xs font-medium text-muted">
             {t("telegram")}
             <input
               value={chatId}
               onChange={(e) => setChatId(e.target.value)}
-              placeholder={t("telegramHint")}
+              placeholder={t("telegramPlaceholder")}
               className="field mt-2"
+              inputMode="numeric"
             />
           </label>
+          <div className="mt-3 rounded-xl border border-line bg-chip/40 px-3.5 py-3">
+            <p className="text-xs font-medium text-fg">{t("telegramHow")}</p>
+            <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-xs leading-5 text-muted">
+              <li>{t("telegramStep1")}</li>
+              <li>{t("telegramStep2")}</li>
+              <li>{t("telegramStep3")}</li>
+              <li>{t("telegramStep4")}</li>
+            </ol>
+            <div className="mt-3 flex flex-col gap-2">
+              <a
+                href="https://t.me/monad_gy_bot"
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs font-medium text-accent underline-offset-2 hover:underline"
+              >
+                {t("telegramOpenBot")}
+              </a>
+              <a
+                href="https://t.me/userinfobot"
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs font-medium text-accent underline-offset-2 hover:underline"
+              >
+                {t("telegramOpenId")}
+              </a>
+            </div>
+          </div>
 
           <button
             type="button"
