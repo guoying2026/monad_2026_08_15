@@ -39,7 +39,7 @@ packages/agent-card   ERC-8004 registration file
 
 1. 读官方两篇：[ERC-8004](https://docs.monad.xyz/guides/erc-8004) · [x402](https://docs.monad.xyz/guides/x402)
 2. 钱包（开发用）+ [Monad faucet](https://faucet.monad.xyz) 的 MON + [Circle faucet](https://faucet.circle.com) 的 Monad Testnet USDC
-3. 可选：OpenAI Key、Telegram Bot Token（`@BotFather`）
+3. 可选：LLM Key、Telegram Bot Token（`@BotFather`）
 4. 安装并启动：
 
 ```bash

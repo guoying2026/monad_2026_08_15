@@ -57,7 +57,7 @@ function ruleBased(event: MarketEvent): Pick<ScanReport, "headline" | "thesis" |
 }
 
 async function fromOpenAI(event: MarketEvent) {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetch(`${config.openaiBaseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${config.openaiKey}`,
@@ -88,7 +88,7 @@ async function fromOpenAI(event: MarketEvent) {
       ],
     }),
   });
-  if (!res.ok) throw new Error(`openai ${res.status}`);
+  if (!res.ok) throw new Error(`llm ${res.status}`);
   const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const parsed = JSON.parse(body.choices?.[0]?.message?.content ?? "{}") as {
     headline?: string;
@@ -114,7 +114,7 @@ export async function analyzeEvent(event: MarketEvent) {
     try {
       return await fromOpenAI(event);
     } catch (err) {
-      console.warn("[llm] openai fallback:", err instanceof Error ? err.message : err);
+      console.warn("[llm] fallback:", err instanceof Error ? err.message : err);
     }
   }
   return ruleBased(event);
